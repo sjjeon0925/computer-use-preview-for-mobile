@@ -303,6 +303,20 @@ class CUAgent:
         if self._verbose:
             print(f"[CUAgent] step: 이전 액션 '{previous_action['action']}'의 결과 수신")
 
+        function_response_data = {
+            "result": "Action executed by client successfully.",
+            "url": current_activity or "unknown_activity"
+        }
+
+        # 만약 이전 요청(args)에 safety_decision이 있었다면, 
+        # 응답에도 safety_acknowledgement를 포함시켜서 "확인했음"을 알려야 합니다.
+        if "args" in previous_action and "safety_decision" in previous_action["args"]:
+            # 공식 코드: extra_fr_fields["safety_acknowledgement"] = "true"
+            function_response_data["safety_acknowledgement"] = True 
+            
+            if self._verbose:
+                print("[CUAgent] Safety Decision 확인 완료 (safety_acknowledgement=True 전송)")
+        
         self._contents.append(
             Content(
                 role="user",
@@ -310,10 +324,7 @@ class CUAgent:
                     Part(
                         function_response=FunctionResponse(
                             name=previous_action['action'],
-                            response={
-                                "result": "Action executed by client successfully.",
-                                "url": current_activity or "unknown_activity"
-                            },
+                            response=function_response_data
                         )
                     ),
                     Part(inline_data=types.Blob(mime_type="image/png", data=current_screenshot_data)),
