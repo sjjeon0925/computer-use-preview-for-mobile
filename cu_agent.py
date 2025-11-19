@@ -309,9 +309,8 @@ class CUAgent:
         }
 
         # 만약 이전 요청(args)에 safety_decision이 있었다면, 
-        # 응답에도 safety_acknowledgement를 포함시켜서 "확인했음"을 알려야 합니다.
+        # 응답에도 safety_acknowledgement를 포함시켜야 합니다
         if "args" in previous_action and "safety_decision" in previous_action["args"]:
-            # 공식 코드: extra_fr_fields["safety_acknowledgement"] = "true"
             function_response_data["safety_acknowledgement"] = True 
             
             if self._verbose:
