@@ -159,9 +159,18 @@ class ChatAgent:
         else: # RESPONSE or ERROR
             self._cu_task_in_progress = False 
             self._last_cu_action_json = None
+
+            if cu_result["type"] == "RESPONSE":
+                self._contents.append(
+                    Content(
+                        role="user", 
+                        parts=[Part(text=f"[System] 앱 조작 완료 결과: {cu_result['message']}")]
+                    )
+                )
             # TODO: CUAgent의 최종 응답(cu_result)을 ChatAgent의 LLM에게 알려 
             # 더 친절한 사용자용 응답(self.final_reasoning)을 생성하도록 run_one_iteration()을 한 번 더 호출.
             # (현재는 CUAgent의 응답을 바로 반환)
+            # TODO: 그런데 CUAgent의 응답도 충분히 친절함. -> 위의 로직을 반드시 추가할 필요는 없어보임
 
         return cu_result
     
@@ -244,10 +253,12 @@ class ChatAgent:
         try:
             response = self.get_model_response()
         except Exception as e:
+            print(f"[ChatAgent] Error in run_one_iteration: {e}")
             return "COMPLETE"
 
         if not response.candidates:
-            raise ValueError("Response has no candidates!")
+            print("[ChatAgent] Response has no candidates!")
+            return "COMPLETE"
 
         candidate = response.candidates[0]
         if candidate.content:
@@ -271,7 +282,10 @@ class ChatAgent:
         fc_result = self.handle_action(function_calls[0])
 
         self._contents.append(
-            Content(role="user", parts=[FunctionResponse(name=function_calls[0].name, response=fc_result)])
+            Content(
+                role="user", 
+                parts=[Part(function_response=FunctionResponse(name=function_calls[0].name, response=fc_result))]
+            )
         )
         return "CONTINUE"
 

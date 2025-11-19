@@ -68,6 +68,16 @@ def main():
                     print("--- (클라이언트가 액션을 수행합니다...) ---")
                     screenshot_filename = input("액션 수행 후 스크린샷 파일명 입력: ")
 
+                if screenshot_filename == "1":
+                    screenshot_filename = "1_initial.jpg"
+                elif screenshot_filename == "2":
+                    screenshot_filename = "2_Chrome.jpg"
+                elif screenshot_filename == "3":
+                    screenshot_filename = "3_position.jpg"
+                elif screenshot_filename == "4":
+                    screenshot_filename = "4_aftersafety.jpg"
+                elif screenshot_filename == "5":
+                    screenshot_filename = "5_scrolldown.jpg"
                 # --- /chat/step으로 스크린샷 전송 ---
                 filepath = os.path.join(SCREENSHOT_DIR, screenshot_filename.strip())
                 
