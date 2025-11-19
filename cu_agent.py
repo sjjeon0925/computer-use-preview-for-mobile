@@ -283,6 +283,39 @@ class CUAgent:
 
         return {"type": "ERROR", "message": "CUAgent: Unknown model response type."}
     
+    def _prune_old_screenshots(self):
+        """[성능 최적화] 히스토리에서 오래된 스크린샷 데이터 제거"""
+        turns_with_screenshots = 0
+        
+        # 대화 내역을 최신 > 과거 순서로 탐색
+        for content in reversed(self._contents):
+            if not content.parts:
+                continue
+                
+            has_screenshot = False
+            parts_to_keep = []
+            
+            for part in content.parts:
+                # inline image 확인
+                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                    has_screenshot = True
+                    # 이미지가 허용 개수 이내면 유지, 초과면 제거
+                    if turns_with_screenshots < MAX_RECENT_TURN_WITH_SCREENSHOTS:
+                        parts_to_keep.append(part)
+                    else:
+                        # TODO: 제거한 이미지 대체 텍스트 삽입 (선택사항)
+                        if self._verbose:
+                            print("[CUAgent] 오래된 스크린샷 토큰 제거됨")
+                
+                else:
+                    parts_to_keep.append(part)
+
+            if has_screenshot:
+                turns_with_screenshots += 1
+            
+            # 필터링된 파트들로 교체
+            content.parts = parts_to_keep
+    
     def init_task(self, instruction: str, screenshot_data: Optional[bytes], url_or_activity: Optional[str]) -> Dict[str, Any]:
         """[서버] 새 작업을 시작합니다."""
         if self._verbose:
@@ -296,6 +329,9 @@ class CUAgent:
             parts.append(Part(text="현재 화면 정보 없음."))
             
         self._contents = [Content(role="user", parts=parts)]
+
+        self._prune_old_screenshots()
+
         return self._run_and_parse_response()
 
     def step(self, previous_action: Dict[str, Any], current_screenshot_data: bytes, current_activity: Optional[str]) -> Dict[str, Any]:
@@ -331,4 +367,7 @@ class CUAgent:
                 ]
             )
         )
+
+        self._prune_old_screenshots()
+
         return self._run_and_parse_response()
