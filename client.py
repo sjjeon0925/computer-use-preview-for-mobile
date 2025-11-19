@@ -82,6 +82,8 @@ def main():
                     screenshot_filename = "6_captcha.jpg"
                 elif screenshot_filename == "7":
                     screenshot_filename = "7_captcha2.jpg"
+                elif screenshot_filename == "8":
+                    screenshot_filename = "8_restaurant.jpg"
 
                 # --- /chat/step으로 스크린샷 전송 ---
                 filepath = os.path.join(SCREENSHOT_DIR, screenshot_filename.strip())
