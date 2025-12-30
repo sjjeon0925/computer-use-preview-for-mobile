@@ -14,6 +14,7 @@
 
 import os
 import time
+import datetime
 from typing import Literal, Optional, Union, Any, Dict
 
 import termcolor
@@ -37,6 +38,20 @@ from rich.table import Table
 load_dotenv()
 console = Console()
 
+# ==============================================================================
+# [설정] 히스토리 관리 전략 및 로깅 설정
+# ==============================================================================
+# 1. "none"     : 히스토리 무한 누적 (요약 없음, 삭제 없음) -> 느려짐, 토큰 에러 가능성
+# 2. "sliding"  : 오래된 턴 단순 삭제 (기억 상실) -> 가벼움, 문맥 끊김
+# 3. "abstract" : 오래된 턴 요약 압축 (기억 보존) -> 토큰 절약 + 문맥 유지
+
+HISTORY_STRATEGY = "abstract"  # <--- 여기를 수정해서 테스트하세요! ("none" | "sliding" | "abstract")
+
+KEEP_RECENT_TURNS = 5           # (공통) 생생하게 유지할 최근 턴 수 (스크린샷 포함)
+SUMMARY_THRESHOLD = 10          # (공통) 관리가 시작될 최소 히스토리 길이
+LOG_DIR = "logs"                # 로그 파일이 저장될 폴더
+# ==============================================================================
+
 ANDROID_SYSTEM_PROMPT = """
 You are an intelligent agent tasked with operating an Android phone to complete user instructions.
 
@@ -58,8 +73,6 @@ You are an intelligent agent tasked with operating an Android phone to complete 
 * **Action Clarity:** Always state your **reasoning** before calling a function.
 * **Efficiency:** Use the advanced custom functions (e.g., `open_app`, `scroll_to_text`) whenever they offer a clear efficiency advantage over basic actions (e.g., multiple taps or scrolls).
 """
-
-MAX_RECENT_TURN_WITH_SCREENSHOTS = 3
 
 FunctionResponseT = Dict[str, Any]
 
@@ -137,6 +150,12 @@ class CUAgent:
         )
         self._contents: list[Content] = [] # 대화 히스토리
 
+        self._current_log_file = None # 현재 세션의 로그 파일 경로
+
+        # 로그 디렉토리 생성
+        if not os.path.exists(LOG_DIR):
+            os.makedirs(LOG_DIR)
+
         # Exclude any predefined functions here.
         excluded_predefined_functions = self.EXCLUDED_PREDEFINED_FUNCTIONS
 
@@ -171,6 +190,74 @@ class CUAgent:
                 )
             ],
         )
+    # --------------------------------------------------------------------------
+    # [Log Helper] 로그 기록 및 히스토리 덤프 함수
+    # --------------------------------------------------------------------------
+    def _start_new_log_file(self):
+        """새로운 작업(Task)이 시작될 때마다 고유한 로그 파일을 생성합니다."""
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"log_{HISTORY_STRATEGY}_{timestamp}.txt"
+        self._current_log_file = os.path.join(LOG_DIR, filename)
+        
+        with open(self._current_log_file, "w", encoding="utf-8") as f:
+            f.write(f"=== New Session Started ===\n")
+            f.write(f"Strategy: {HISTORY_STRATEGY}\n")
+            f.write(f"Time: {timestamp}\n")
+            f.write("="*50 + "\n")
+        
+        if self._verbose:
+            print(f"[CUAgent] Logging to file: {self._current_log_file}")
+
+    def _log_to_file(self, message: str):
+        """[로그 추가] 로그 파일에 메시지를 기록하는 헬퍼 함수"""
+        if not self._current_log_file:
+            return
+        
+        # 파일에 덧붙이기 모드(a)로 기록
+        with open(self._current_log_file, "a", encoding="utf-8") as f:
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            f.write(f"[{timestamp}] {message}\n")
+
+    def _log_full_history_state(self, step_name: str):
+        """현재 self._contents의 모든 내용을 텍스트로 풀어 로그 파일에 기록합니다."""
+        if not self._current_log_file:
+            return
+
+        with open(self._current_log_file, "a", encoding="utf-8") as f:
+            f.write(f"\n\n>>> [Step: {step_name}] Current History State (Length: {len(self._contents)}) <<<\n")
+            f.write("-" * 50 + "\n")
+            
+            for i, content in enumerate(self._contents):
+                role = content.role.upper()
+                f.write(f"[{i}] ROLE: {role}\n")
+                
+                if not content.parts:
+                    f.write("    (Empty Content)\n")
+                    continue
+
+                for part in content.parts:
+                    # 1. 텍스트 출력
+                    if part.text:
+                        # 줄바꿈이 많을 수 있으니 들여쓰기 처리
+                        text_content = part.text.replace('\n', '\n    ')
+                        f.write(f"    TEXT: {text_content}\n")
+                    
+                    # 2. 이미지 개수 출력 (inline_data)
+                    if part.inline_data:
+                        f.write(f"    [IMAGE DATA: {part.inline_data.mime_type}]\n")
+
+                    # 3. 함수 호출 출력
+                    if part.function_call:
+                        f.write(f"    FUNCTION CALL: {part.function_call.name}({part.function_call.args})\n")
+
+                    # 4. 함수 응답 출력 (응답 내 이미지 확인)
+                    if part.function_response:
+                        f.write(f"    FUNCTION RESPONSE: {part.function_response.name}\n")
+                        f.write(f"      -> Response Payload: {part.function_response.response}\n")
+                        # (참고: FunctionResponse 내부는 구조상 이미지 파트가 별도로 존재할 수 있음, 여기선 Payload만 표기)
+
+            f.write("-" * 50 + "\n")
+    # --------------------------------------------------------------------------
 
     def get_model_response(
         self, max_retries=5, base_delay_s=1
@@ -244,11 +331,12 @@ class CUAgent:
         reasoning = self.get_text(candidate)
         function_calls = self.extract_function_calls(candidate)
 
+        # 모델 응답 후 히스토리 상태 기록
+        self._log_full_history_state("After Model Response")
+
         if function_calls:
             fc = function_calls[0]
-            
             if self._verbose:
-                # 기존 테이블 출력 로직 복원
                 function_call_strs = []
                 function_call_str = f"Name: {fc.name}"
                 if fc.args:
@@ -283,41 +371,108 @@ class CUAgent:
 
         return {"type": "ERROR", "message": "CUAgent: Unknown model response type."}
     
-    def _prune_old_screenshots(self):
-        """[성능 최적화] 히스토리에서 오래된 스크린샷 데이터 제거"""
-        turns_with_screenshots = 0
+    # ==========================================================================
+    # [History Management] 전략 구현
+    # ==========================================================================
+    def _manage_history(self):
+        """설정된 전략에 따라 히스토리를 정리합니다."""
+        current_len = len(self._contents)
         
-        # 대화 내역을 최신 > 과거 순서로 탐색
-        for content in reversed(self._contents):
-            if not content.parts:
-                continue
-                
-            has_screenshot = False
-            parts_to_keep = []
-            
-            for part in content.parts:
-                # inline image 확인
-                if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                    has_screenshot = True
-                    # 이미지가 허용 개수 이내면 유지, 초과면 제거
-                    if turns_with_screenshots < MAX_RECENT_TURN_WITH_SCREENSHOTS:
-                        parts_to_keep.append(part)
-                    else:
-                        # TODO: 제거한 이미지 대체 텍스트 삽입 (선택사항)
-                        if self._verbose:
-                            print("[CUAgent] 오래된 스크린샷 토큰 제거됨")
-                
-                else:
-                    parts_to_keep.append(part)
+        if current_len <= SUMMARY_THRESHOLD:
+            return
 
-            if has_screenshot:
-                turns_with_screenshots += 1
+        if HISTORY_STRATEGY == "none":
+            # 아무것도 안 함
+            pass
+
+        elif HISTORY_STRATEGY == "sliding":
+            self._prune_sliding_window()
+
+        elif HISTORY_STRATEGY == "abstract":
+            self._abstract_history()
+
+        # 정리 후 상태 기록
+        self._log_full_history_state(f"After Management ({HISTORY_STRATEGY})")
+
+    def _prune_sliding_window(self):
+        """[Sliding Window] 오래된 턴 삭제"""
+        start_index = 1
+        end_index = len(self._contents) - KEEP_RECENT_TURNS
+
+        if end_index < len(self._contents) and self._contents[end_index].role == "user":
+            end_index -= 1
+        
+        if end_index > start_index:
+            self._contents = [self._contents[0]] + self._contents[end_index:]
+            if self._verbose:
+                print(f"[CUAgent] Sliding Window: Removed {end_index - start_index} turns.")
+
+    def _abstract_history(self):
+        """[Abstract] 오래된 턴을 요약합니다. (수정됨: Call-Response 짝 유지)"""
+        # 요약 시작 지점 (0번은 시스템 프롬프트/첫 지시이므로 유지)
+        start_index = 1
+        # 요약 끝 지점 (최근 N개는 남김)
+        end_index = len(self._contents) - KEEP_RECENT_TURNS
+        
+        # [중요 수정 1] 자르는 위치가 'User(응답)'라면, 그 짝인 'Model(호출)'도 같이 남겨야 함
+        # 즉, 'Keep' 영역의 시작은 반드시 'Model' 턴이어야 함 (User 응답만 남으면 에러 발생)
+        if end_index < len(self._contents) and self._contents[end_index].role == "user":
+            end_index -= 1
+
+        turns_to_summarize = self._contents[start_index:end_index]
+        if not turns_to_summarize:
+            return
+
+        # 요약을 위한 텍스트 추출
+        history_text_buffer = []
+        for content in turns_to_summarize:
+            role = content.role
+            texts = [p.text for p in content.parts if p.text]
+            for p in content.parts:
+                if p.function_call:
+                    texts.append(f"[Call: {p.function_call.name}]")
+                if p.function_response:
+                    texts.append(f"[Result: {p.function_response.name}]")
             
-            # 필터링된 파트들로 교체
-            content.parts = parts_to_keep
-    
+            history_text_buffer.append(f"{role}: {' '.join(texts)}")
+
+        full_history_text = "\n".join(history_text_buffer)
+        
+        summary_prompt = f"""
+        Below is the log of a mobile agent's actions. 
+        Summarize "what app was opened, what actions were taken, and what state it reached" in 3 sentences.
+        
+        [Logs]
+        {full_history_text}
+        """
+
+        try:
+            summary_response = self._client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=summary_prompt
+            )
+            summary_text = summary_response.text
+            self._log_to_file(f"-> Generated Summary: {summary_text}")
+
+            # [중요 수정 2] 요약문의 역할을 'user'로 변경하여 대화 흐름(User->Model) 유지
+            summary_content = Content(
+                role="user",
+                parts=[Part(text=f"*** Previous Log Summary ***\n{summary_text}")]
+            )
+            
+            self._contents = [self._contents[0]] + [summary_content] + self._contents[end_index:]
+            self._log_to_file(f"-> History Condensed. New Length: {len(self._contents)}")
+
+        except Exception as e:
+            self._log_to_file(f"-> Summary Failed: {e}")
+    # ==========================================================================
+
     def init_task(self, instruction: str, screenshot_data: Optional[bytes], url_or_activity: Optional[str]) -> Dict[str, Any]:
         """[서버] 새 작업을 시작합니다."""
+
+        # [중요] 새로운 작업이 시작되면 새 로그 파일을 엽니다.
+        self._start_new_log_file()
+
         if self._verbose:
             print(f"[CUAgent] init_task: 새 작업 시작 (Instruction: {instruction})")
             
@@ -330,7 +485,8 @@ class CUAgent:
             
         self._contents = [Content(role="user", parts=parts)]
 
-        self._prune_old_screenshots()
+        # 초기 상태 기록
+        self._log_full_history_state("Init Task")
 
         return self._run_and_parse_response()
 
@@ -368,6 +524,6 @@ class CUAgent:
             )
         )
 
-        self._prune_old_screenshots()
+        self._manage_history()
 
         return self._run_and_parse_response()
