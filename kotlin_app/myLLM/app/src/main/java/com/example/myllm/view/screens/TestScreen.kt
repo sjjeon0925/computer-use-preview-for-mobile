@@ -20,8 +20,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
-import com.example.myllm.AccessibilityActions
+import com.example.myllm.data.Action
+import com.example.myllm.service.ActionController
 import com.example.myllm.ui.theme.MyLLMTheme
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +50,7 @@ fun TestScreen(navController: NavController) {
 
     val context = LocalContext.current
     val scrollState = rememberScrollState()
+    val scope = rememberCoroutineScope()
 
     var textToFind by remember { mutableStateOf("") }
 
@@ -101,19 +104,15 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    // 스크립트를 ; 기준으로 쪼개서 리스트로 만듦
-                    val commands = macroScript.split(';')
-                        .map { it.trim() } // 앞뒤 공백 제거
-                        .filter { it.isNotEmpty() } // 빈 줄 제거
+                    scope.launch {
+                        // 스크립트를 ; 기준으로 쪼개서 리스트로 만듦
+                        val commands = macroScript.split(';')
+                            .map { it.trim() } // 앞뒤 공백 제거
+                            .filter { it.isNotEmpty() } // 빈 줄 제거
 
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_RUN_MACRO)
-                        // ⭐️ [수정] String List를 ArrayList로 변환해서 보냄
-                        putStringArrayListExtra(AccessibilityActions.EXTRA_MACRO_COMMANDS, ArrayList(commands))
-                        setPackage(context.packageName)
+                        ActionController.sendAction(Action.PerformMacro(commands))
+                        println("매크로 액션 전송: $commands")
                     }
-                    context.sendBroadcast(intent)
-                    println("매크로 방송 보냄: $commands")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -169,16 +168,12 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val x = xPixelClick.toFloatOrNull() ?: 0f
-                    val y = yPixelClick.toFloatOrNull() ?: 0f
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_CLICK)
-                        putExtra(AccessibilityActions.EXTRA_X, x)
-                        putExtra(AccessibilityActions.EXTRA_Y, y)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        val x = xPixelClick.toFloatOrNull() ?: 0f
+                        val y = yPixelClick.toFloatOrNull() ?: 0f
+                        ActionController.sendAction(Action.ClickAt(x, y))
+                        println("픽셀 클릭 액션 전송: ($x, $y)")
                     }
-                    context.sendBroadcast(intent)
-                    println("픽셀 클릭 방송 보냄: ($x, $y)")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -218,17 +213,12 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val x = xPixelType.toFloatOrNull() ?: 0f
-                    val y = yPixelType.toFloatOrNull() ?: 0f
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_TYPE_TEXT)
-                        putExtra(AccessibilityActions.EXTRA_TEXT, textToType)
-                        putExtra(AccessibilityActions.EXTRA_X, x)
-                        putExtra(AccessibilityActions.EXTRA_Y, y)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        val x = xPixelType.toFloatOrNull() ?: 0f
+                        val y = yPixelType.toFloatOrNull() ?: 0f
+                        ActionController.sendAction(Action.ClickAndTypeText(x, y, textToType))
+                        println("클릭 후 타이핑 액션 전송: $textToType at ($x, $y)")
                     }
-                    context.sendBroadcast(intent)
-                    println("클릭 후 타이핑 방송 보냄: $textToType at ($x, $y)")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -254,14 +244,11 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_SCROLL)
-                        putExtra(AccessibilityActions.EXTRA_SCROLL_UP, scrollUp)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformScroll(scrollUp))
+                        val direction = if (scrollUp) "위로" else "아래로"
+                        println("스크롤 액션 전송: $direction")
                     }
-                    context.sendBroadcast(intent)
-                    val direction = if (scrollUp) "위로" else "아래로"
-                    println("스크롤 방송 보냄: $direction")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -278,13 +265,10 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_SCROLL_TO_TEXT)
-                        putExtra(AccessibilityActions.EXTRA_TEXT, textToFind)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformScrollToText(textToFind))
+                        println("텍스트($textToFind) 찾기 스크롤 액션 전송")
                     }
-                    context.sendBroadcast(intent)
-                    println("텍스트($textToFind) 찾기 스크롤 방송 보냄")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -297,12 +281,10 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_GO_BACK)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformGoBack)
+                        println("뒤로 가기 액션 전송")
                     }
-                    context.sendBroadcast(intent)
-                    println("뒤로 가기 방송 보냄")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -312,12 +294,10 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp)) // 버튼 사이 간격
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_GO_HOME)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformGoHome)
+                        println("홈으로 가기 액션 전송")
                     }
-                    context.sendBroadcast(intent)
-                    println("홈으로 가기 방송 보냄")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -337,13 +317,10 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_OPEN_APP)
-                        putExtra(AccessibilityActions.EXTRA_PACKAGE_NAME, packageName)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformOpenApp(packageName))
+                        println("앱 실행 액션 전송: $packageName")
                     }
-                    context.sendBroadcast(intent)
-                    println("앱 실행 방송 보냄: $packageName")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -374,16 +351,12 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val x = xPixelLong.toFloatOrNull() ?: 0f
-                    val y = yPixelLong.toFloatOrNull() ?: 0f
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_LONG_PRESS)
-                        putExtra(AccessibilityActions.EXTRA_X, x)
-                        putExtra(AccessibilityActions.EXTRA_Y, y)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        val x = xPixelLong.toFloatOrNull() ?: 0f
+                        val y = yPixelLong.toFloatOrNull() ?: 0f
+                        ActionController.sendAction(Action.PerformLongPress(x, y))
+                        println("롱 클릭 액션 전송: ($x, $y)")
                     }
-                    context.sendBroadcast(intent)
-                    println("롱 클릭 방송 보냄: ($x, $y)")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -407,14 +380,11 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_SWIPE_HORIZONTAL)
-                        putExtra(AccessibilityActions.EXTRA_SWIPE_RIGHT, swipeRight)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        ActionController.sendAction(Action.PerformHorizontalSwipe(swipeRight))
+                        val direction = if (swipeRight) "오른쪽" else "왼쪽"
+                        println("좌우 스와이프 액션 전송: $direction")
                     }
-                    context.sendBroadcast(intent)
-                    val direction = if (swipeRight) "오른쪽" else "왼쪽"
-                    println("좌우 스와이프 방송 보냄: $direction")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -433,14 +403,11 @@ fun TestScreen(navController: NavController) {
             Spacer(modifier = Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val duration = waitDuration.toLongOrNull() ?: 5000L
-                    val intent = Intent(AccessibilityActions.ACTION_PERFORM_GESTURE).apply {
-                        putExtra(AccessibilityActions.GESTURE_TYPE, AccessibilityActions.GESTURE_WAIT)
-                        putExtra(AccessibilityActions.EXTRA_DURATION_MS, duration)
-                        setPackage(context.packageName)
+                    scope.launch {
+                        val duration = waitDuration.toLongOrNull() ?: 5000L
+                        ActionController.sendAction(Action.PerformWait(duration))
+                        println("대기 액션 전송: $duration ms")
                     }
-                    context.sendBroadcast(intent)
-                    println("대기 방송 보냄: $duration ms")
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
