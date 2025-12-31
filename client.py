@@ -9,6 +9,7 @@ import requests
 import os
 import json
 import uuid
+import time
 
 # --- 설정 ---
 SERVER_URL = "http://localhost:8000"
@@ -16,6 +17,44 @@ QUERY_ENDPOINT = f"{SERVER_URL}/chat/query"
 STEP_ENDPOINT = f"{SERVER_URL}/chat/step"
 SCREENSHOT_DIR = "screenshots"
 # ------------
+
+def get_existing_files(directory):
+    """현재 폴더에 있는 파일 목록을 집합(Set)으로 반환합니다."""
+    if not os.path.exists(directory):
+        return set()
+    return set(os.listdir(directory))
+
+def wait_for_new_file(directory, known_files):
+    """
+    directory 폴더를 모니터링하다가 known_files에 없는 새 파일이 생기면 반환합니다.
+    이미지 파일(.png, .jpg, .jpeg)만 감지합니다.
+    """
+    print(f"\n[대기 중] '{directory}' 폴더에 새 스크린샷이 추가되기를 기다리는 중...", end="", flush=True)
+    
+    while True:
+        try:
+            current_files = set(os.listdir(directory))
+            new_files = current_files - known_files
+            
+            # 새 파일 중 이미지 파일만 필터링
+            image_files = [f for f in new_files if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+            
+            if image_files:
+                # 여러 개가 동시에 생겼다면 하나만 선택 (여기선 정렬 후 첫 번째)
+                target_file = sorted(image_files)[0]
+                print(f"\n[감지!] 새 파일이 발견되었습니다: {target_file}")
+                
+                # 파일이 완전히 써질 때까지 아주 잠깐 대기 (안정성 확보)
+                time.sleep(0.5) 
+                return target_file
+            
+            # 새 파일이 없으면 잠시 대기
+            time.sleep(1)
+            print(".", end="", flush=True)
+            
+        except KeyboardInterrupt:
+            print("\n[취소] 대기 중단")
+            return None
 
 def main():
     """
@@ -28,8 +67,10 @@ def main():
     
     # 세션을 사용하여 연결을 유지합니다 (선택 사항이지만 권장).
     session = requests.Session()
-
     session_id = str(uuid.uuid4())
+
+    # [추가] 현재 폴더에 있는 파일들을 미리 기록해둡니다 (이 파일들은 새 파일로 인식 안 함)
+    known_files = get_existing_files(SCREENSHOT_DIR)
 
     while True:
         try:
@@ -59,39 +100,32 @@ def main():
                 
                 if server_data.get("type") == "REQUIRE_SCREENSHOT":
                     print(f"[서버] {server_data.get('message')}")
-                    screenshot_filename = input("스크린샷 파일명 입력 (예: screen1.png): ")
-                
+                    # screenshot_filename = input("스크린샷 파일명 입력 (예: screen1.png): ")
+                    # [변경] 입력 대신 파일 감지 함수 호출
+                    screenshot_filename = wait_for_new_file(SCREENSHOT_DIR, known_files)
+
                 elif server_data.get("type") == "ACTION":
                     action = server_data.get('action')
                     args = server_data.get('args')
                     print(f"[서버 액션] {action}({args})")
                     print("--- (클라이언트가 액션을 수행합니다...) ---")
-                    screenshot_filename = input("액션 수행 후 스크린샷 파일명 입력: ")
+                    # screenshot_filename = input("액션 수행 후 스크린샷 파일명 입력: ")
+                    # [변경] 입력 대신 파일 감지 함수 호출
+                    screenshot_filename = wait_for_new_file(SCREENSHOT_DIR, known_files)
 
-                if screenshot_filename == "1":
-                    screenshot_filename = "1_initial.jpg"
-                elif screenshot_filename == "2":
-                    screenshot_filename = "2_Chrome.jpg"
-                elif screenshot_filename == "3":
-                    screenshot_filename = "3_position.jpg"
-                elif screenshot_filename == "4":
-                    screenshot_filename = "4_aftersafety.jpg"
-                elif screenshot_filename == "5":
-                    screenshot_filename = "5_scrolldown.jpg"
-                elif screenshot_filename == "6":
-                    screenshot_filename = "6_captcha.jpg"
-                elif screenshot_filename == "7":
-                    screenshot_filename = "7_captcha2.jpg"
-                elif screenshot_filename == "8":
-                    screenshot_filename = "8_restaurant.jpg"
+                if not screenshot_filename:
+                    print("파일 감지에 실패했거나 취소되었습니다. 루프를 종료합니다.")
+                    break
+
+                # [중요] 방금 감지된 파일을 known_files에 추가하여 다음 턴에 중복 감지 방지
+                known_files.add(screenshot_filename)
 
                 # --- /chat/step으로 스크린샷 전송 ---
                 filepath = os.path.join(SCREENSHOT_DIR, screenshot_filename.strip())
                 
                 if not os.path.exists(filepath):
-                    print(f"[오류] {filepath} 에서 파일을 찾을 수 없습니다. 작업을 중단합니다.")
-                    # 작업을 중단하고 새 쿼리 대기
-                    break 
+                    print(f"[오류] {filepath} 에서 파일을 찾을 수 없습니다.")
+                    continue 
 
                 try:
                     with open(filepath, 'rb') as f:
