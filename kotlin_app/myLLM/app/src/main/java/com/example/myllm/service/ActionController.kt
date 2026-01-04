@@ -9,7 +9,14 @@ object ActionController {
     private val _actionFlow = MutableSharedFlow<Action>()
     val actionFlow = _actionFlow.asSharedFlow()
 
+    private val _actionResultFlow = MutableSharedFlow<Boolean>()
+    val actionResultFlow = _actionResultFlow.asSharedFlow()
+
     suspend fun sendAction(action: Action) {
         _actionFlow.emit(action)
+    }
+
+    suspend fun emitActionResult(success: Boolean) {
+        _actionResultFlow.emit(success)
     }
 }

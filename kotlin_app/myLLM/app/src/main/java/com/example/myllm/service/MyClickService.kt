@@ -18,9 +18,13 @@ import com.example.myllm.AccessibilityActions
 import com.example.myllm.data.Action
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 class MyClickService : AccessibilityService() {
 
@@ -109,7 +113,6 @@ class MyClickService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.d("MyClickService", "서비스 연결됨. UI 명령 수신 대기 시작.")
         
         // BroadcastReceiver 대신 Flow를 구독
         // ChatRepository에서 SharedFlow로 실행함
@@ -153,9 +156,11 @@ class MyClickService : AccessibilityService() {
         dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription); Log.d("MyClickService", "클릭 성공: ($x, $y)")
+                serviceScope.launch { ActionController.emitActionResult(true) }
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription); Log.d("MyClickService", "클릭 실패")
+                serviceScope.launch { ActionController.emitActionResult(false) }
             }
         }, null)
     }
