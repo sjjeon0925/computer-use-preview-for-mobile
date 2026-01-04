@@ -1,21 +1,89 @@
 package com.example.myllm.repository
 
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
 import android.graphics.Bitmap
+import android.os.IBinder
 import android.util.Log
 import com.example.myllm.data.Action
 import com.example.myllm.network.AgentResponseDto
-import com.example.myllm.network.ApiService
 import com.example.myllm.network.NetworkClient
 import com.example.myllm.service.ActionController
+import com.example.myllm.service.ScreenCaptureService
 import com.example.myllm.service.UserService
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 
-class ChatRepository(
-    private val apiService: ApiService = NetworkClient.service // 기존 싱글톤 사용
-) {
+class ChatRepository(private val context: Context) {
+    private var captureService: ScreenCaptureService? = null
+    private var isBound = false
+
+    private val connection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as ScreenCaptureService.LocalBinder
+            captureService = binder.getService()
+            isBound = true
+        }
+        override fun onServiceDisconnected(name: ComponentName?) {
+            isBound = false
+        }
+    }
+
+    init {
+        // Repository 생성 시점에 서비스를 바인딩
+        bindCaptureService()
+    }
+    fun bindCaptureService() {
+        val intent = Intent(context, ScreenCaptureService::class.java)
+        context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    suspend fun startAgentIteration(resultCode: Int, data: Intent) {
+        captureService?.initializeProjection(resultCode, data)
+
+        var shouldContinue = true
+        while (shouldContinue) {
+            // 1. 캡처
+            val bitmap = withTimeoutOrNull(3000) { captureService?.captureCurrentScreen() }
+            if(bitmap == null){
+                Log.d("startAgentIteration", "captureCurrentScreen() result is null")
+                break
+            }
+
+            // 2. 서버 전송
+            val result = uploadScreenCapture(bitmap, "CurrentApp")
+
+            result.onSuccess { response ->
+                Log.d("startAgentIteration", "uploadScreenCapture() result is $response")
+                // 3. 종료 조건 확인 (예: 서버가 종료 응답을 보냄)
+                when(response.type){
+                    "ACTION" -> {
+                        // 4. 액션 실행 및 완료 대기
+                        val success = processActionAndWait(response)
+                        if (!success) Log.w("ChatRepository", "액션 실행 실패")
+                    }
+                    "RESPONSE" -> {
+                        shouldContinue = false
+                    }
+                }
+            }.onFailure {
+                shouldContinue = false
+            }
+
+            kotlinx.coroutines.delay(1000) // 사이클 간 간격
+        }
+    }
     suspend fun processUserMessage(userInput: String): Result<AgentResponseDto> {
         return try {
             // 서버에 텍스트 전송 (Network)
@@ -23,22 +91,79 @@ class ChatRepository(
             if(response.isSuccessful){
                 val body = response.body()
                 if(body != null){
-                    if(body.type == "ACTION"){
-                        val action = parseAction(body)
-                        ActionController.sendAction(action)
-                    }
-                    Log.i("ChatRepository", "Form 전송 성공: ${response.code()}")
+                    // Iteration 진입해야함
+                    Log.i("ChatRepository", "Form 전송 및 응답 수신 성공: ${response.code()}")
                     Result.success(body)
                 } else{
                     Result.failure(Exception("Empty Response Body"))
                 }
             }else{
-                Log.e("ChatRepository", "Form 전송 실패: ${response.code()}")
+                Log.e("ChatRepository", "Form 전송 혹은 응답 수신 실패: ${response.code()}")
                 Result.failure(Exception("Error Code: ${response.code()}"))
             }
         } catch (e: Exception) {
             Log.e("ChatRepository", "Chat 오류: ${e.message}", e)
             Result.failure(e)
+        }
+    }
+
+    // 스크린샷 이미지와 컨텍스트를 서버로 업로드 (Service에서 호출)
+    suspend fun uploadScreenCapture(bitmap: Bitmap, activityContext: String): Result<AgentResponseDto> {
+        return try {
+            // Bitmap을 MultipartBody.Part로 변환
+            val filePart = bitmapToMultipartPart(bitmap)
+
+            // Activity 컨텍스트를 포함
+            val contextstr = "<state><app name='${activityContext}'/></state>"
+            val contextBody = contextstr.toRequestBody("text/plain".toMediaTypeOrNull())
+            val sessionIdBody = UserService.getUserId().toRequestBody("text/plain".toMediaTypeOrNull())
+
+            val agentResponse = NetworkClient.service.sendStepMultipart(filePart, contextBody,
+                sessionIdBody)
+
+            if(agentResponse.isSuccessful){
+                val body = agentResponse.body()
+                if(body != null){
+                    Log.i("ChatRepository", "Image Form 전송 성공: ${body.message}")
+                    Result.success(body)
+                }else{
+                    Result.failure(Exception("Empty Response"))
+                }
+            }else{
+                Log.e("ChatViewModel", "Image Form 전송 실패: ${agentResponse.code()}")
+                Result.failure(Exception("Upload Failed: ${agentResponse.code()}"))
+            }
+        } catch (e: Exception) {
+            Log.e("ChatViewModel", "스크린샷 업로드 통신 오류: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    // Action 실행하고 종료까지 wait하는 함수
+    suspend fun processActionAndWait(body: AgentResponseDto): Boolean {
+        val action = parseAction(body)
+
+        val resultDeferred = CompletableDeferred<Boolean>()
+        val job = CoroutineScope(Dispatchers.IO).launch {
+            ActionController.actionResultFlow.collect { success ->
+                resultDeferred.complete(success)
+                this.cancel() // 한 번 받으면 종료
+            }
+        }
+
+        ActionController.sendAction(action)
+
+        return try {
+            withTimeout(5000) {
+                val isSuccess = resultDeferred.await()
+                Log.i("ChatRepository", "액션 실행 결과 수신: $isSuccess")
+                isSuccess
+            }
+        } catch (e: Exception) {
+            Log.e("ChatRepository", "액션 실행 대기 중 타임아웃 발생: $e")
+            false
+        } finally {
+            job.cancel()
         }
     }
 
@@ -170,41 +295,6 @@ class ChatRepository(
         }
     }
 
-
-     // 스크린샷 이미지와 컨텍스트를 서버로 업로드 (Service에서 호출)
-    suspend fun uploadScreenCapture(bitmap: Bitmap, activityContext: String): Result<AgentResponseDto> {
-        return try {
-            // Bitmap을 MultipartBody.Part로 변환
-            val filePart = bitmapToMultipartPart(bitmap)
-
-            // Activity 컨텍스트를 포함
-            val contextstr = "<state><app name='${activityContext}'/></state>"
-            val contextBody = contextstr.toRequestBody("text/plain".toMediaTypeOrNull())
-            val sessionIdBody = UserService.getUserId().toRequestBody("text/plain".toMediaTypeOrNull())
-
-            val agentResponse = NetworkClient.service.sendStepMultipart(filePart, contextBody,
-                sessionIdBody)
-
-            if(agentResponse.isSuccessful){
-                val body = agentResponse.body()
-                if(body != null){
-                    if (body.type == "ACTION") {
-                        ActionController.sendAction(parseAction(body))
-                    }
-                    Log.i("ChatRepository", "Image Form 전송 성공: ${body.message}")
-                    Result.success(body)
-                }else{
-                    Result.failure(Exception("Empty Response"))
-                }
-            }else{
-                Log.e("ChatViewModel", "Image Form 전송 실패: ${agentResponse.code()}")
-                Result.failure(Exception("Upload Failed: ${agentResponse.code()}"))
-            }
-        } catch (e: Exception) {
-            Log.e("ChatViewModel", "스크린샷 업로드 통신 오류: ${e.message}", e)
-            Result.failure(e)
-        }
-    }
 
     // Bitmap을 네트워크 전송용 Multipart로 변환
     private fun bitmapToMultipartPart(

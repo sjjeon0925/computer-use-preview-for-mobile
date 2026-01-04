@@ -7,6 +7,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
@@ -15,6 +16,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
+import android.os.Binder
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -36,6 +38,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
+import androidx.core.graphics.createBitmap
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlin.coroutines.resume
 
 // 이 서비스는 화면 캡처를 위해 Foreground Service로 실행되어야 한다.
 class ScreenCaptureService : Service() {
@@ -45,7 +50,6 @@ class ScreenCaptureService : Service() {
     private val NOTIFICATION_ID = 101
 
     // MediaProjection 관련 변수
-    private var mediaProjectionManager: MediaProjectionManager? = null
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
@@ -55,8 +59,6 @@ class ScreenCaptureService : Service() {
     private var screenHeight: Int = 0
     private var screenDensityDpi: Int = 0
 
-    private val chatRepository: ChatRepository = ChatRepository()
-
     // 네트워크 전송용 코루틴 스코프
     private val serviceScope = CoroutineScope(Dispatchers.IO)
 
@@ -64,7 +66,19 @@ class ScreenCaptureService : Service() {
     // atomic하게 CAS 실행
     private val isCapturing = AtomicBoolean(false)
 
+    private val binder = LocalBinder();
 
+    inner class LocalBinder() : Binder(){
+        fun getService(): ScreenCaptureService = this@ScreenCaptureService
+    }
+    val mediaProjectionCallback = object : MediaProjection.Callback() {
+        override fun onStop() {
+            // CLEAN UP RESOURCES HERE
+            mediaProjection?.stop()
+            mediaProjection = null
+            super.onStop()
+        }
+    }
     companion object {
         // Activity에서 서비스로 MediaProjection 권한 결과를 전달하기 위한 키
         const val EXTRA_RESULT_DATA = "extra_result_data"
@@ -83,7 +97,6 @@ class ScreenCaptureService : Service() {
     // windowManager 초기화(화면 정보 초기화)
     override fun onCreate() {
         super.onCreate()
-        mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
         // 화면 크기 정보 초기화
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -105,64 +118,36 @@ class ScreenCaptureService : Service() {
             screenHeight = metrics.heightPixels
             screenDensityDpi = metrics.densityDpi
         }
-
-        startForeground(NOTIFICATION_ID, createNotification())
     }
 
     // isCapturing 변수로 캡쳐 실행
     // false: 캡쳐, true면 캡쳐 중
     // MediaProjection 객체 생성해서 캡쳐
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val resultData: Intent? = intent?.getParcelableExtra(EXTRA_RESULT_DATA)
-        val activityContext: String = intent?.getStringExtra(EXTRA_ACTIVITY_CONTEXT) ?: "UnknownApp"
+    override fun onBind(intent: Intent?): IBinder = binder
 
-        if (resultData == null) {
-            Log.e(TAG, "MediaProjection Intent data is null.")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
-        if (isCapturing.compareAndSet(false, true)) {
-
-            // MediaProjection 객체를 생성
-            mediaProjection = mediaProjectionManager?.getMediaProjection(
-                Activity.RESULT_OK,
-                resultData
+    fun initializeProjection(resultCode: Int, data: Intent){
+        if (mediaProjection != null) return // 한 번만 생성
+        
+        val mediaProjectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        // 안드로이드 14(API 34) 이상에서 registerCallback 등록 안하면 시스템에서 앱 강제 종료함
+        // Android 14 서비스 타입을 명시하여 포그라운드 시작
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(
+                NOTIFICATION_ID,
+                createNotification(),
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
-
-            // 안드로이드 14(API 34) 이상에서 registerCallback 등록 안하면 시스템에서 앱 강제 종료함
-            mediaProjection?.registerCallback(object :MediaProjection.Callback(){
-                override fun onStop(){
-                    super.onStop()
-                    virtualDisplay?.release()
-                }
-            }, Handler(Looper.getMainLooper()))
-
-            if (mediaProjection != null) {
-                // 실제 캡처 및 업로드 로직 실행
-                captureScreenAndUpload(activityContext)
-            } else {
-                Log.e(TAG, "MediaProjection failed to start.")
-                isCapturing.set(false)
-                stopSelf()
-            }
         } else {
-            Log.w(TAG, "Capture already in progress, ignoring new command.")
+            startForeground(NOTIFICATION_ID, createNotification())
         }
 
-        return START_NOT_STICKY
-    }
+        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode,data)
+        mediaProjection?.registerCallback(mediaProjectionCallback, Handler(Looper.getMainLooper()))
 
-    // 캡처, 변환, 전송
-    private fun captureScreenAndUpload(activityContext: String) {
-        // ImageReader 설정: RGB_888(컬러) 포맷 사용
-        // 마지막 인자는 최대 이미지 수, 여기서는 1
         imageReader = ImageReader.newInstance(
             screenWidth, screenHeight,
             PixelFormat.RGBA_8888, 1
         )
-
-        // VirtualDisplay 생성
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
             screenWidth, screenHeight,
@@ -172,32 +157,36 @@ class ScreenCaptureService : Service() {
             null,
             null // Handler
         )
+    }
 
-        // ImageReader의 리스너 설정 (캡처 완료 시 호출)
-        // Main Looper에서 실행되도록 Handler 지정
-        imageReader?.setOnImageAvailableListener({ reader ->
-            // 캡처 완료 후 리스너 해제 및 리소스 정리
-            reader.setOnImageAvailableListener(null, null)
+    suspend fun captureCurrentScreen(): Bitmap? = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
+        val reader = imageReader ?: run {
+            Log.d("ScreenCaptureService", "imageReader is null. suspend coroutine")
+            continuation.resume(null)
+            return@suspendCancellableCoroutine
+        }
 
-            val image = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+        reader.setOnImageAvailableListener({ r ->
+            try {
+                // 리스너를 즉시 해제하여 중복 호출 방지
+                r.setOnImageAvailableListener(null, null)
 
-            // Image를 Bitmap으로 변환
-            val bitmap = processImage(image)
-            image.close()
-            cleanupResources() // 캡처 완료 후 리소스 정리
+                val image = r.acquireLatestImage()
+                if (image != null) {
+                    val bitmap = processImage(image) // 기존 이미지 변환 로직
+                    image.close()
 
-            if (bitmap != null) {
-                // [Repository] 네트워크 전송용으로 변환 후 업로드
-                serviceScope.launch {
-                    chatRepository.uploadScreenCapture(bitmap, activityContext)
-                    isCapturing.set(false)
-                    stopSelf()
+                    if (continuation.isActive) continuation.resume(bitmap)
+                    Log.d("ScreenCaptureService", "bitmap successfully captured: $image")
+                } else {
+                    if (continuation.isActive) continuation.resume(null)
+                    Log.e("ScreenCaptureService", "bitmap is null: $image")
                 }
-            } else {
-                isCapturing.set(false)
-                Log.e(TAG, "Bitmap is null, upload skipped.")
+            } catch (e: Exception) {
+                Log.e("ScreenCaptureService", "캡처 중 오류: ${e.message}")
+                if (continuation.isActive) continuation.resume(null)
             }
-        }, Handler(Looper.getMainLooper())) // Main Looper 핸들러 사용
+        }, Handler(Looper.getMainLooper()))
     }
 
     // 서비스 리소스 정리
@@ -216,11 +205,6 @@ class ScreenCaptureService : Service() {
         Log.i(TAG, "ScreenCaptureService onDestroy")
     }
 
-    // 바인드 x
-    override fun onBind(intent: Intent?): IBinder? {
-        return null
-    }
-
     private fun processImage(image: Image): Bitmap?{
         return try {
             val planes = image.planes
@@ -229,7 +213,7 @@ class ScreenCaptureService : Service() {
             val rowStride = planes[0].rowStride
             val rowPadding = rowStride - pixelStride * screenWidth
 
-            val bmp = Bitmap.createBitmap(screenWidth + rowPadding / pixelStride, screenHeight, Bitmap.Config.ARGB_8888)
+            val bmp = createBitmap(screenWidth + rowPadding / pixelStride, screenHeight)
             bmp.copyPixelsFromBuffer(buffer)
 
             // 실제 이미지 영역만 잘라내기

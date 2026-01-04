@@ -1,16 +1,14 @@
 package com.example.myllm.viewmodel
 
+import android.content.Intent
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.myllm.service.UserService
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.network.AgentResponseDto
-import com.example.myllm.network.NetworkClient
 import com.example.myllm.repository.ChatRepository
 import kotlinx.coroutines.launch
 
@@ -23,7 +21,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         private set
     var isLoading by mutableStateOf(false)
         private set
-
     var isCaptureRequested by mutableStateOf(false)
         private set
 
@@ -34,10 +31,15 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
     fun onCaptureRequestHandled() {
         isCaptureRequested = false
     }
-
-    // 이벤트 핸들러: UI가 호출할 함수
     fun updateUserInput(newInput: String) {
         userInput = newInput
+    }
+
+    fun onProjectionPermissionResult(resultCode: Int, data: Intent){
+        viewModelScope.launch {
+            Log.d("ChatViewModel", "repository.startAgentIteration resultCode: ($resultCode), Data: ($data)")
+            repository.startAgentIteration(resultCode, data)
+        }
     }
 
     /**
@@ -66,32 +68,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
     // --- Private 네트워크/데이터 처리 함수 ---
 
-    private fun sendTextToAgent(input: String) {
-        viewModelScope.launch {
-            isLoading = true
-            try {
-                Log.i("ChatViewModel", "Chat Sending request: ${input}")
-
-                val response = NetworkClient.service.sendMessage(input, UserService.getUserId())
-                if(response.isSuccessful){
-                    response.body()?.let { agentResponseDto ->
-                        handleLlmResponse(agentResponseDto)
-                    }
-                }else{
-                    Log.e("ChatViewModel", "Form 전송 실패: ${response.code()}")
-                    val errorMessage = AppChatMessage("Form 전송 실패: ${response.message()}", false)
-                    messages = messages + errorMessage
-                }
-            } catch (e: Exception) {
-                Log.e("ChatViewModel", "Chat 오류: ${e.message}", e)
-                val errorMessage = AppChatMessage("텍스트 전송 실패: ${e.message}", false)
-                messages = messages + errorMessage
-            } finally {
-                isLoading = false
-            }
-        }
-    }
-
     private fun handleLlmResponse(response: AgentResponseDto) {
         Log.d("ChatViewModel", "LLM 응답 수신: Type=${response.type}")
         val responseText: String
@@ -110,13 +86,13 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             "REQUIRE_SCREENSHOT" -> {
                 responseText = response.message ?: "화면을 캡처합니다..."
                 Log.i("ChatViewModel", "LLM 텍스트 응답: $responseText")
-                isCaptureRequested = true
+                requestScreenshot()
             }
             // /chat/step
+            // Action은 repository.processUserMessage에서 따로 처리함.
             "ACTION" -> {
-                val func = response.args
-                responseText = "기능 호출: ${response.action}, 인자: ${response.args}"
-                Log.w("ChatViewModel", responseText)
+                responseText = "요청을 실행 중입니다..."
+                Log.d("ChatViewModel", "기능 호출: ${response.action}, 인자: ${response.args}")
             }
             "ERROR" -> {
                 responseText = response.message ?: "응답 에러 텍스트 없음"

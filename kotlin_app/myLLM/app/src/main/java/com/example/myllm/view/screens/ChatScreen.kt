@@ -45,13 +45,12 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.repository.ChatRepository
-import com.example.myllm.service.ScreenCaptureService
 import com.example.myllm.ui.theme.MyLLMTheme
 import com.example.myllm.viewmodel.ChatViewModel
 
-class ChatViewModelFactory : ViewModelProvider.Factory {
+class ChatViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        val repository = ChatRepository()
+        val repository = ChatRepository(context)
         return ChatViewModel(repository) as T
     }
 }
@@ -60,13 +59,9 @@ class ChatViewModelFactory : ViewModelProvider.Factory {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(navController: NavController) {
-    // Context를 얻어 Factory에 전달
     val context = LocalContext.current
+    val chatViewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory(context.applicationContext))
 
-    // ViewModel 주입 및 Factory 사용
-    val chatViewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory())
-
-    // ViewModel 상태를 UI에서 읽기
     val userInput = chatViewModel.userInput
     val messages = chatViewModel.messages
     val isLoading = chatViewModel.isLoading
@@ -75,16 +70,15 @@ fun ChatScreen(navController: NavController) {
         context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
     }
 
-    // 런처 정의: Activity 결과 처리.
+    // 런처 정의: 시스템 팝업을 띄우고, 사용자가 승인했는지 거절했는지에 대한 결과(Intent data)를 받을 통로 정의.
+    // rememberLauncherForActivityResult: 외부 액티비티로부터 결과를 받아오기 위한 Contract 객체
     val screenCaptureLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        // 1. 권한 승인 확인
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             Log.d("ChatScreen", "MediaProjection 권한 승인됨. 서비스 시작 요청.")
 
-            val intent = ScreenCaptureService.getStartIntent(context, result.data, "ChatScreen")
-            context.startForegroundService(intent)
+            chatViewModel.onProjectionPermissionResult(resultCode = result.resultCode, data = result.data!!) // 앞 조건문에서 result.data != null 확인했으니
         } else {
             Log.e("ChatScreen", "MediaProjection 권한 거부됨.")
             // TODO: 권한 거부 시 로딩 상태 해제 등의 추가 처리 필요 (ViewModel에서 처리할 수도 있음)
@@ -92,14 +86,14 @@ fun ChatScreen(navController: NavController) {
         chatViewModel.onCaptureRequestHandled()
     }
 
-    // LaunchedEffect: isCaptureRequested의 변화에 반응
+    // LaunchedEffect: Compose 화면이 나타날 때(또는 특정 변수가 변할 때) 실행되는 Coroutine 블록,
+    // isCaptureRequested의 변화에 반응
     LaunchedEffect(chatViewModel.isCaptureRequested) {
         if (chatViewModel.isCaptureRequested) {
             Log.d("ChatScreen", "ViewModel 플래그 감지: 스크린샷 권한 요청 시작.")
 
             // MediaProjectionManager를 통해 권한 요청 Intent 생성
             val intent = mediaProjectionManager.createScreenCaptureIntent()
-            // 런처 실행 -> 1번 단계의 콜백으로 결과가 돌아옴
             screenCaptureLauncher.launch(intent)
         }
     }
