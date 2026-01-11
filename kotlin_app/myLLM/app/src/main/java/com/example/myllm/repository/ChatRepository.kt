@@ -11,6 +11,7 @@ import com.example.myllm.data.Action
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.network.NetworkClient
 import com.example.myllm.service.ActionController
+import com.example.myllm.service.AppState
 import com.example.myllm.service.ScreenCaptureService
 import com.example.myllm.service.UserService
 import kotlinx.coroutines.CompletableDeferred
@@ -20,6 +21,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -27,6 +30,7 @@ import java.io.ByteArrayOutputStream
 
 class ChatRepository(private val context: Context) {
     private var captureService: ScreenCaptureService? = null
+    fun getCaptureService(): ScreenCaptureService? {return captureService}
     private var isBound = false
 
     private val connection: ServiceConnection = object : ServiceConnection {
@@ -49,23 +53,39 @@ class ChatRepository(private val context: Context) {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
-    suspend fun startAgentIteration(resultCode: Int, data: Intent) {
+    suspend fun startAgentIteration(resultCode: Int, data: Intent) : Result<AgentResponseDto>? {
         captureService?.initializeProjection(resultCode, data)
 
+        var result: Result<AgentResponseDto>? = null
         var shouldContinue = true
+        var iterationCount = 0
         while (shouldContinue) {
+            Log.d("startAgentIteration", "iteration starting log...($iterationCount)")
+            iterationCount += 1
             // 1. 캡처
-            val bitmap = withTimeoutOrNull(3000) { captureService?.captureCurrentScreen() }
-            if(bitmap == null){
-                Log.d("startAgentIteration", "captureCurrentScreen() result is null")
-                break
+            var bitmap: Bitmap? = null
+            var captureTry = 0
+            while(captureTry < 5){
+                bitmap = withTimeoutOrNull(6000) {
+                    try {
+                        captureService?.captureCurrentScreen()
+                    }catch(e:Exception){
+                        Log.e("startAgentIteration", "캡쳐 중 error 발생: ${e.message}")
+                        null
+                    }
+                }
+                if(bitmap == null){
+                    Log.d("startAgentIteration", "bitmap is null")
+                    captureTry++
+                }else break
+
             }
+            if(captureTry > 4) break
 
             // 2. 서버 전송
-            val result = uploadScreenCapture(bitmap, "CurrentApp")
-
+            result = uploadScreenCapture(bitmap!!)
             result.onSuccess { response ->
-                Log.d("startAgentIteration", "uploadScreenCapture() result is $response")
+                Log.d("AgentIteration", "uploadScreenCapture() result is $response")
                 // 3. 종료 조건 확인 (예: 서버가 종료 응답을 보냄)
                 when(response.type){
                     "ACTION" -> {
@@ -76,13 +96,16 @@ class ChatRepository(private val context: Context) {
                     "RESPONSE" -> {
                         shouldContinue = false
                     }
+                    "ERROR" -> {
+                        shouldContinue = false
+                    }
                 }
             }.onFailure {
                 shouldContinue = false
             }
-
             kotlinx.coroutines.delay(1000) // 사이클 간 간격
         }
+        return result
     }
     suspend fun processUserMessage(userInput: String): Result<AgentResponseDto> {
         return try {
@@ -108,13 +131,18 @@ class ChatRepository(private val context: Context) {
     }
 
     // 스크린샷 이미지와 컨텍스트를 서버로 업로드 (Service에서 호출)
-    suspend fun uploadScreenCapture(bitmap: Bitmap, activityContext: String): Result<AgentResponseDto> {
+    suspend fun uploadScreenCapture(bitmap: Bitmap): Result<AgentResponseDto> {
         return try {
             // Bitmap을 MultipartBody.Part로 변환
             val filePart = bitmapToMultipartPart(bitmap)
 
             // Activity 컨텍스트를 포함
-            val contextstr = "<state><app name='${activityContext}'/></state>"
+            val contextstr = """
+                <state>
+                    <foreground_app>${AppState.currentPackageName}</foreground_app>
+                    <timestamp>${System.currentTimeMillis()}</timestamp>
+                </state>
+            """.trimIndent()
             val contextBody = contextstr.toRequestBody("text/plain".toMediaTypeOrNull())
             val sessionIdBody = UserService.getUserId().toRequestBody("text/plain".toMediaTypeOrNull())
 
@@ -130,11 +158,11 @@ class ChatRepository(private val context: Context) {
                     Result.failure(Exception("Empty Response"))
                 }
             }else{
-                Log.e("ChatViewModel", "Image Form 전송 실패: ${agentResponse.code()}")
+                Log.e("ChatRepository", "Image Form 전송 실패: ${agentResponse.code()}")
                 Result.failure(Exception("Upload Failed: ${agentResponse.code()}"))
             }
         } catch (e: Exception) {
-            Log.e("ChatViewModel", "스크린샷 업로드 통신 오류: ${e.message}", e)
+            Log.e("ChatRepository", "스크린샷 업로드 통신 오류: ${e.message}", e)
             Result.failure(e)
         }
     }
@@ -154,7 +182,7 @@ class ChatRepository(private val context: Context) {
         ActionController.sendAction(action)
 
         return try {
-            withTimeout(5000) {
+            withTimeout(10000) {
                 val isSuccess = resultDeferred.await()
                 Log.i("ChatRepository", "액션 실행 결과 수신: $isSuccess")
                 isSuccess
@@ -173,24 +201,24 @@ class ChatRepository(private val context: Context) {
         return when(dto.action) {
             // 클릭 액션
             "click_at" -> {
-                val x = dto.args?.get("x")?.toFloatOrNull() ?: 0f
-                val y = dto.args?.get("y")?.toFloatOrNull() ?: 0f
+                val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 Log.i("ChatRepository", "ClickAt: ($x, $y)")
                 Action.ClickAt(x, y)
             }
             
             // 텍스트 입력 액션
             "type_text_at" -> {
-                val x = dto.args?.get("x")?.toFloatOrNull() ?: 0f
-                val y = dto.args?.get("y")?.toFloatOrNull() ?: 0f
-                val text = dto.args?.get("text") ?: ""
+                val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val text = dto.args?.get("text")?.jsonPrimitive?.contentOrNull ?: ""
                 Log.i("ChatRepository", "ClickAndTypeText: ($x, $y) text='$text'")
                 Action.ClickAndTypeText(x, y, text)
             }
             
             // 스크롤 액션
             "scroll_at" -> {
-                val direction = dto.args?.get("direction") ?: "up"
+                val direction = dto.args?.get("direction")?.jsonPrimitive?.contentOrNull ?: "up"
                 val scrollUp = direction.lowercase() == "up"
                 Log.i("ChatRepository", "PerformScroll: scrollUp=$scrollUp")
                 Action.PerformScroll(scrollUp)
@@ -210,7 +238,8 @@ class ChatRepository(private val context: Context) {
             
             // 앱 실행 (중요: 서버는 app_name을 보냄)
             "open_app" -> {
-                val appName = dto.args?.get("app_name") ?: dto.args?.get("name") ?: ""
+                val appName = dto.args?.get("app_name")?.jsonPrimitive?.contentOrNull
+                    ?: dto.args?.get("name")?.jsonPrimitive?.contentOrNull ?: ""
                 Log.i("ChatRepository", "PerformOpenApp: appName='$appName'")
                 
                 // 앱 이름을 패키지명으로 변환
@@ -220,25 +249,25 @@ class ChatRepository(private val context: Context) {
             
             // 롱 클릭
             "long_press_at" -> {
-                val x = dto.args?.get("x")?.toFloatOrNull() ?: 0f
-                val y = dto.args?.get("y")?.toFloatOrNull() ?: 0f
+                val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 Log.i("ChatRepository", "PerformLongPress: ($x, $y)")
                 Action.PerformLongPress(x, y)
             }
             
             // 텍스트 찾아 스크롤
             "scroll_to_text" -> {
-                val text = dto.args?.get("text") ?: ""
+                val text = dto.args?.get("text")?.jsonPrimitive?.contentOrNull ?: ""
                 Log.i("ChatRepository", "PerformScrollToText: text='$text'")
                 Action.PerformScrollToText(text)
             }
             
             // 스와이프
             "swipe" -> {
-                val startX = dto.args?.get("start_x")?.toFloatOrNull() ?: 0f
-                val startY = dto.args?.get("start_y")?.toFloatOrNull() ?: 0f
-                val endX = dto.args?.get("end_x")?.toFloatOrNull() ?: 0f
-                val endY = dto.args?.get("end_y")?.toFloatOrNull() ?: 0f
+                val startX = dto.args?.get("start_x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val startY = dto.args?.get("start_y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val endX = dto.args?.get("end_x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
+                val endY = dto.args?.get("end_y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 
                 // 수평 스와이프인지 판단
                 val isHorizontal = kotlin.math.abs(startY - endY) < 100

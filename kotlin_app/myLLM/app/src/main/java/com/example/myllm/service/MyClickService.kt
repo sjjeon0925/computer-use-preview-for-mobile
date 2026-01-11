@@ -122,8 +122,6 @@ class MyClickService : AccessibilityService() {
                 executeAction(action)
             }
         }
-//        val filter = IntentFilter(AccessibilityActions.ACTION_PERFORM_GESTURE)
-//        registerReceiver(gestureReceiver, filter, RECEIVER_NOT_EXPORTED)
     }
 
     private fun CoroutineScope.executeAction(action: Action) {
@@ -155,12 +153,14 @@ class MyClickService : AccessibilityService() {
         gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, 1))
         dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                super.onCompleted(gestureDescription); Log.d("MyClickService", "클릭 성공: ($x, $y)")
+                super.onCompleted(gestureDescription)
                 serviceScope.launch { ActionController.emitActionResult(true) }
+                Log.d("MyClickService", "클릭 성공: ($x, $y)")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                super.onCancelled(gestureDescription); Log.d("MyClickService", "클릭 실패")
+                super.onCancelled(gestureDescription)
                 serviceScope.launch { ActionController.emitActionResult(false) }
+                Log.d("MyClickService", "클릭 실패")
             }
         }, null)
     }
@@ -174,10 +174,12 @@ class MyClickService : AccessibilityService() {
         dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(true) }
                 Log.d("MyClickService", "롱 클릭 성공: ($x, $y)")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(false) }
                 Log.e("MyClickService", "롱 클릭 실패")
             }
         }, null)
@@ -193,12 +195,15 @@ class MyClickService : AccessibilityService() {
                 serviceScope.launch {
                     delay(700)
                     performSmartInput(x, y, text)
+                    ActionController.emitActionResult(true)
                 }
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription); Log.e("MyClickService", "클릭 실패. 타이핑 취소됨.")
+                serviceScope.launch { ActionController.emitActionResult(false) }
             }
         }, null)
+
     }
     private fun performSmartInput(x: Float, y: Float, text: String) {
         serviceScope.launch {
@@ -276,10 +281,14 @@ class MyClickService : AccessibilityService() {
         gestureBuilder.addStroke(GestureDescription.StrokeDescription(path, 0, duration))
         dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                super.onCompleted(gestureDescription); Log.d("MyClickService", "스크롤 성공")
+                super.onCompleted(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(true) }
+                Log.d("MyClickService", "스크롤 성공")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                super.onCancelled(gestureDescription); Log.e("MyClickService", "스크롤 실패")
+                super.onCancelled(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(false) }
+                Log.e("MyClickService", "스크롤 실패")
             }
         }, null)
     }
@@ -316,22 +325,31 @@ class MyClickService : AccessibilityService() {
         dispatchGesture(gestureBuilder.build(), object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
                 super.onCompleted(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(true) }
                 Log.d("MyClickService", "좌우 스와이프 성공")
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 super.onCancelled(gestureDescription)
+                serviceScope.launch { ActionController.emitActionResult(false) }
                 Log.e("MyClickService", "좌우 스와이프 실패")
             }
         }, null)
     }
     private fun performGoBack() {
         val success = performGlobalAction(GLOBAL_ACTION_BACK)
-        if (success) Log.d("MyClickService", "뒤로 가기(Global Action) 성공")
-        else Log.e("MyClickService", "뒤로 가기(Global Action) 실패")
+        if (success) {
+            serviceScope.launch { ActionController.emitActionResult(true) }
+            Log.d("MyClickService", "뒤로 가기(Global Action) 성공")
+        } else {
+            serviceScope.launch { ActionController.emitActionResult(true) }
+            Log.e("MyClickService", "뒤로 가기(Global Action) 실패")
+        }
     }
     private fun performOpenApp(packageName: String) {
         if (packageName.isBlank()) {
-            Log.e("MyClickService", "앱 실행 실패: 패키지 이름이 비어있습니다."); return
+            Log.e("MyClickService", "앱 실행 실패: 패키지 이름이 비어있습니다.")
+            serviceScope.launch { ActionController.emitActionResult(true) }
+            return
         }
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         Log.d("MyClickService", "packageName $packageName")
@@ -339,18 +357,27 @@ class MyClickService : AccessibilityService() {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 startActivity(launchIntent)
+                serviceScope.launch { ActionController.emitActionResult(true) }
                 Log.d("MyClickService", "앱 실행 성공: $packageName")
             } catch (e: Exception) {
+                serviceScope.launch { ActionController.emitActionResult(false) }
                 Log.e("MyClickService", "앱 실행 중 예외 발생", e)
             }
         } else {
+            serviceScope.launch { ActionController.emitActionResult(false) }
             Log.e("MyClickService", "앱 실행 실패: '$packageName' 앱을 찾을 수 없습니다.")
         }
     }
     private fun performGoHome() {
         val success = performGlobalAction(GLOBAL_ACTION_HOME)
-        if (success) Log.d("MyClickService", "홈으로 가기(Global Action) 성공")
-        else Log.e("MyClickService", "홈으로 가기(Global Action) 실패")
+        if (success ){
+            serviceScope.launch { ActionController.emitActionResult(true) }
+            Log.d("MyClickService", "홈으로 가기(Global Action) 성공")
+        }
+        else{
+            serviceScope.launch { ActionController.emitActionResult(false) }
+            Log.e("MyClickService", "홈으로 가기(Global Action) 실패")
+        }
     }
 
     // ⭐️ [수정] "포함(contains)" 검색을 하도록 로직 변경
@@ -379,6 +406,8 @@ class MyClickService : AccessibilityService() {
             }
         }
         allNodes.forEach { it.recycle() }
+        if(found) serviceScope.launch { ActionController.emitActionResult(true) }
+        else serviceScope.launch { ActionController.emitActionResult(false) }
         return found
     }
 
@@ -440,7 +469,10 @@ class MyClickService : AccessibilityService() {
             isScrollingToText = false
 
             // (최종 확인 사살)
-            if (!findTextOnScreen(text)) {
+            if (findTextOnScreen(text)) {
+                serviceScope.launch { ActionController.emitActionResult(true) }
+            }else{
+                serviceScope.launch { ActionController.emitActionResult(false) }
                 Log.e("MyClickService", "텍스트 찾기 최종 실패: '$text'를 찾을 수 없습니다.")
             }
         }
@@ -453,6 +485,7 @@ class MyClickService : AccessibilityService() {
             Log.d("MyClickService", "대기 시작... ($durationMs ms)")
             delay(durationMs)
             Log.d("MyClickService", "대기 완료.")
+            serviceScope.launch { ActionController.emitActionResult(true) }
         }
     }
 
@@ -549,5 +582,19 @@ class MyClickService : AccessibilityService() {
         serviceScope.cancel()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event?.let{
+            if(it.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED){
+                val packageName = it.packageName.toString()
+                if(packageName != null){
+                    AppState.currentPackageName = packageName
+                    Log.d("onAccessibilityEvent", "현재 ForeGround 앱: ${AppState.currentPackageName}")
+                }
+            }
+        }
+    }
+}
+
+object AppState {
+    var currentPackageName: String = "unknown"
 }
