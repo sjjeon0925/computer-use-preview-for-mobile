@@ -77,7 +77,6 @@ fun ChatScreen(navController: NavController) {
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             Log.d("ChatScreen", "MediaProjection 권한 승인됨. 서비스 시작 요청.")
-
             chatViewModel.onProjectionPermissionResult(resultCode = result.resultCode, data = result.data!!) // 앞 조건문에서 result.data != null 확인했으니
         } else {
             Log.e("ChatScreen", "MediaProjection 권한 거부됨.")

@@ -1,6 +1,5 @@
 package com.example.myllm.service
 
-import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -25,21 +24,18 @@ import android.util.DisplayMetrics
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.NotificationCompat
-import com.aallam.openai.client.Chat
 import com.example.myllm.R
-import com.example.myllm.network.NetworkClient
-import com.example.myllm.repository.ChatRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.graphics.createBitmap
-import kotlinx.coroutines.ExperimentalCoroutinesApi
+import com.example.myllm.network.AgentResponseDto
+import com.example.myllm.repository.ChatRepository
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import okhttp3.Response
 import kotlin.coroutines.resume
 
 // 이 서비스는 화면 캡처를 위해 Foreground Service로 실행되어야 한다.
@@ -55,19 +51,29 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
 
     // 화면 크기 및 DPI 정보
+    val scale = 0.5f
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
     private var screenDensityDpi: Int = 0
 
     // 네트워크 전송용 코루틴 스코프
-    private val serviceScope = CoroutineScope(Dispatchers.IO)
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // 현재 캡처 및 전송 작업 중인지 확인하는 플래그
-    // atomic하게 CAS 실행
-    private val isCapturing = AtomicBoolean(false)
+    // 루프 실행을 위한 Job 관리
+    private var agentJob: Job? = null
 
-    private val binder = LocalBinder();
+    fun startAgentLoop(repository: ChatRepository, resultCode: Int, data: Intent): Result<AgentResponseDto>? {
+        // 이미 실행 중인 루프가 있다면 취소
+        agentJob?.cancel()
 
+        var response: Result<AgentResponseDto>? = null
+        agentJob = serviceScope.launch {
+            response = repository.startAgentIteration(resultCode, data)
+        }
+        return response
+    }
+
+    private val binder = LocalBinder()
     inner class LocalBinder() : Binder(){
         fun getService(): ScreenCaptureService = this@ScreenCaptureService
     }
@@ -144,14 +150,18 @@ class ScreenCaptureService : Service() {
         mediaProjection = mediaProjectionManager.getMediaProjection(resultCode,data)
         mediaProjection?.registerCallback(mediaProjectionCallback, Handler(Looper.getMainLooper()))
 
+        val scaledWidth = (screenWidth * scale).toInt()
+        val scaledHeight = (screenHeight * scale).toInt()
+        val scaledDpi = (screenDensityDpi* scale).toInt()
+
         imageReader = ImageReader.newInstance(
-            screenWidth, screenHeight,
-            PixelFormat.RGBA_8888, 1
+            scaledWidth, scaledHeight,
+            PixelFormat.RGBA_8888, 2
         )
         virtualDisplay = mediaProjection?.createVirtualDisplay(
             "ScreenCapture",
-            screenWidth, screenHeight,
-            screenDensityDpi,
+            scaledWidth, scaledHeight,
+            scaledDpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
             imageReader?.surface,
             null,
@@ -176,11 +186,11 @@ class ScreenCaptureService : Service() {
                     val bitmap = processImage(image) // 기존 이미지 변환 로직
                     image.close()
 
-                    if (continuation.isActive) continuation.resume(bitmap)
                     Log.d("ScreenCaptureService", "bitmap successfully captured: $image")
+                    if (continuation.isActive) continuation.resume(bitmap)
                 } else {
-                    if (continuation.isActive) continuation.resume(null)
                     Log.e("ScreenCaptureService", "bitmap is null: $image")
+                    if (continuation.isActive) continuation.resume(null)
                 }
             } catch (e: Exception) {
                 Log.e("ScreenCaptureService", "캡처 중 오류: ${e.message}")
@@ -201,23 +211,28 @@ class ScreenCaptureService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        agentJob?.cancel()
         cleanupResources()
         Log.i(TAG, "ScreenCaptureService onDestroy")
     }
 
     private fun processImage(image: Image): Bitmap?{
+
+        val scaledWidth = (screenWidth * scale).toInt()
+        val scaledHeight = (screenHeight * scale).toInt()
+
         return try {
             val planes = image.planes
             val buffer: ByteBuffer = planes[0].buffer
             val pixelStride = planes[0].pixelStride
             val rowStride = planes[0].rowStride
-            val rowPadding = rowStride - pixelStride * screenWidth
+            val rowPadding = rowStride - pixelStride * scaledWidth
 
-            val bmp = createBitmap(screenWidth + rowPadding / pixelStride, screenHeight)
+            val bmp = createBitmap(scaledWidth + rowPadding / pixelStride, scaledHeight)
             bmp.copyPixelsFromBuffer(buffer)
 
             // 실제 이미지 영역만 잘라내기
-            Bitmap.createBitmap(bmp, 0, 0, screenWidth, screenHeight)
+            Bitmap.createBitmap(bmp, 0, 0, scaledWidth, scaledHeight)
         } catch (e: Exception) {
             Log.e(TAG, "Image to Bitmap conversion failed: ${e.message}", e)
             null

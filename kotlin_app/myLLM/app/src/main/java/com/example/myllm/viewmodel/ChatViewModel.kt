@@ -36,9 +36,15 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
     }
 
     fun onProjectionPermissionResult(resultCode: Int, data: Intent){
-        viewModelScope.launch {
-            Log.d("ChatViewModel", "repository.startAgentIteration resultCode: ($resultCode), Data: ($data)")
-            repository.startAgentIteration(resultCode, data)
+        Log.d("ChatViewModel", "repository.startAgentIteration resultCode: ($resultCode), Data: ($data)")
+        repository.getCaptureService()?.let { service ->
+            val iterationResult = service.startAgentLoop(repository, resultCode, data)
+
+            iterationResult?.onSuccess { response ->
+                handleLlmResponse(response)
+            }?.onFailure { error ->
+                messages = messages + AppChatMessage("에러 발생: ${error.message}", false)
+            }
         }
     }
 
@@ -78,14 +84,20 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             // 1. 일상 답변
             // 2. iteration 종료 후 결론
             "RESPONSE" -> {
+                // TODO: 결론 메세지 ChatScreen에 보여주기
                 responseText = response.message ?: "응답 텍스트 없음"
-                Log.i("ChatViewModel", "LLM 텍스트 응답: $responseText")
+                Log.d("ChatViewModel", "LLM 텍스트 응답: $responseText")
             }
-            // 스크린 샷 필요
-            // isCaptureRequested를 true로 만들면 ScreenCaptureService에서
+            // iteration 진입포인트
+            /*
+            isCaptureRequested를 true로 만들면
+            1. ChatScreen에서 스크린샷 권한 받음
+            2. ChatViewModel에서 repository.startAgentIteration()실행
+            2-1. 즉, iteration은 REQUIRE_SCREENSHOT을 답변으로 받으면 실행됨.
+             */
             "REQUIRE_SCREENSHOT" -> {
                 responseText = response.message ?: "화면을 캡처합니다..."
-                Log.i("ChatViewModel", "LLM 텍스트 응답: $responseText")
+                Log.d("ChatViewModel", "LLM 텍스트 응답: $responseText")
                 requestScreenshot()
             }
             // /chat/step
