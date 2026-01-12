@@ -4,6 +4,7 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
+import okhttp3.OkHttpClient
 import okhttp3.RequestBody
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -12,6 +13,7 @@ import retrofit2.http.FormUrlEncoded
 import retrofit2.http.Multipart
 import retrofit2.http.POST
 import retrofit2.http.Part
+import java.util.concurrent.TimeUnit
 
 // 일단 테스트용 로컬 서버 링크 사용
 private const val BASE_URL = "http://10.0.2.2:8000/"
@@ -67,7 +69,14 @@ object NetworkClient{
         isLenient = true
     }
 
+    private val okHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS) // 서버 연결 대기 시간
+        .readTimeout(60, TimeUnit.SECONDS)    // 서버로부터 응답을 받는 시간 (AI 추론 대기)
+        .writeTimeout(60, TimeUnit.SECONDS)   // 서버로 데이터를 보내는 시간 (스크린샷 업로드)
+        .build()
+
     private val retrofit = Retrofit.Builder()
+        .client(okHttpClient)
         .baseUrl(BASE_URL)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()

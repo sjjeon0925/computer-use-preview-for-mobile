@@ -15,7 +15,7 @@ app = FastAPI()
 # 프로덕션에서는 Redis나 DB 사용
 # 서버 재시작 시 초기화되는 임시 메모리 저장소
 SESSION_STORE: Dict[str, ChatAgent] = {}
-SCREENSHOT_SAVE_DIR = None
+SCREENSHOT_SAVE_DIR = "./my_screenshots"
 
 def get_or_create_agent(session_id: str) -> ChatAgent:
     """세션 ID에 해당하는 에이전트를 반환하거나 새로 생성합니다."""
