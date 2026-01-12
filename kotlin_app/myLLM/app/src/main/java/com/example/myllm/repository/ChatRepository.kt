@@ -60,13 +60,15 @@ class ChatRepository(private val context: Context) {
         var shouldContinue = true
         var iterationCount = 0
         while (shouldContinue) {
+            kotlinx.coroutines.delay(1000) // 사이클 간 간격
+
             Log.d("startAgentIteration", "iteration starting log...($iterationCount)")
             iterationCount += 1
             // 1. 캡처
             var bitmap: Bitmap? = null
             var captureTry = 0
             while(captureTry < 5){
-                bitmap = withTimeoutOrNull(6000) {
+                bitmap = withTimeoutOrNull(5000) {
                     try {
                         captureService?.captureCurrentScreen()
                     }catch(e:Exception){
@@ -78,7 +80,6 @@ class ChatRepository(private val context: Context) {
                     Log.d("startAgentIteration", "bitmap is null")
                     captureTry++
                 }else break
-
             }
             if(captureTry > 4) break
 
@@ -103,8 +104,8 @@ class ChatRepository(private val context: Context) {
             }.onFailure {
                 shouldContinue = false
             }
-            kotlinx.coroutines.delay(1000) // 사이클 간 간격
         }
+        Log.d("EndOfAgentIteration", "$result")
         return result
     }
     suspend fun processUserMessage(userInput: String): Result<AgentResponseDto> {

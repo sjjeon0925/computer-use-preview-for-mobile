@@ -56,12 +56,23 @@ class ScreenCaptureService : Service() {
     private var screenHeight: Int = 0
     private var screenDensityDpi: Int = 0
 
-    // 네트워크 전송용 코루틴 스코프
+    private var latestBitmap: Bitmap? = null
+    private val bitmapLock = Any() // 스레드 안전을 위한 락
+
+    /**
+     * ===========================
+     * serviceScope 관리 코드
+     * ===========================
+     */
+    // Background에서 실행하기 위한 코루틴 스코프
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // 루프 실행을 위한 Job 관리
     private var agentJob: Job? = null
 
+    /**
+     * Background에서 실행하기 위해 serviceScope에서 iteration을 실행하는 함수
+     */
     fun startAgentLoop(repository: ChatRepository, resultCode: Int, data: Intent): Result<AgentResponseDto>? {
         // 이미 실행 중인 루프가 있다면 취소
         agentJob?.cancel()
@@ -70,6 +81,7 @@ class ScreenCaptureService : Service() {
         agentJob = serviceScope.launch {
             response = repository.startAgentIteration(resultCode, data)
         }
+        Log.d("ScreenCaptureService-LoopEnd", "$response")
         return response
     }
 
@@ -83,20 +95,6 @@ class ScreenCaptureService : Service() {
             mediaProjection?.stop()
             mediaProjection = null
             super.onStop()
-        }
-    }
-    companion object {
-        // Activity에서 서비스로 MediaProjection 권한 결과를 전달하기 위한 키
-        const val EXTRA_RESULT_DATA = "extra_result_data"
-        // 캡처 후 서버에 전송할 현재 앱 컨텍스트 (Activity 이름 등)
-        const val EXTRA_ACTIVITY_CONTEXT = "extra_activity_context"
-
-        // Activity에서 서비스 시작 시 사용할 Intent 생성 함수
-        fun getStartIntent(context: Context, data: Intent?, activityContext: String): Intent {
-            return Intent(context, ScreenCaptureService::class.java).apply {
-                putExtra(EXTRA_RESULT_DATA, data)
-                putExtra(EXTRA_ACTIVITY_CONTEXT, activityContext)
-            }
         }
     }
 
@@ -167,36 +165,29 @@ class ScreenCaptureService : Service() {
             null,
             null // Handler
         )
-    }
-
-    suspend fun captureCurrentScreen(): Bitmap? = kotlinx.coroutines.suspendCancellableCoroutine { continuation ->
-        val reader = imageReader ?: run {
-            Log.d("ScreenCaptureService", "imageReader is null. suspend coroutine")
-            continuation.resume(null)
-            return@suspendCancellableCoroutine
-        }
-
-        reader.setOnImageAvailableListener({ r ->
+        imageReader?.setOnImageAvailableListener({ r ->
+            val image = r.acquireLatestImage() ?: return@setOnImageAvailableListener
             try {
-                // 리스너를 즉시 해제하여 중복 호출 방지
-                r.setOnImageAvailableListener(null, null)
-
-                val image = r.acquireLatestImage()
-                if (image != null) {
-                    val bitmap = processImage(image) // 기존 이미지 변환 로직
-                    image.close()
-
-                    Log.d("ScreenCaptureService", "bitmap successfully captured: $image")
-                    if (continuation.isActive) continuation.resume(bitmap)
-                } else {
-                    Log.e("ScreenCaptureService", "bitmap is null: $image")
-                    if (continuation.isActive) continuation.resume(null)
+                val bitmap = processImage(image)
+                synchronized(bitmapLock) {
+                    // 이전 비트맵 메모리 해제 (선택 사항)
+                    // latestBitmap?.recycle()
+                    latestBitmap = bitmap
                 }
+//                Log.d("ScreenCaptureService", "bitmap successfully captured: $image")
             } catch (e: Exception) {
                 Log.e("ScreenCaptureService", "캡처 중 오류: ${e.message}")
-                if (continuation.isActive) continuation.resume(null)
+            } finally {
+                image.close()
             }
         }, Handler(Looper.getMainLooper()))
+
+    }
+
+    fun captureCurrentScreen(): Bitmap? {
+        synchronized(bitmapLock) {
+            return latestBitmap
+        }
     }
 
     // 서비스 리소스 정리
