@@ -37,15 +37,18 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
     fun onProjectionPermissionResult(resultCode: Int, data: Intent){
         Log.d("ChatViewModel", "repository.startAgentIteration resultCode: ($resultCode), Data: ($data)")
-        repository.getCaptureService()?.let { service ->
-            val iterationResult = service.startAgentLoop(repository, resultCode, data)
-
-            iterationResult?.onSuccess { response ->
-                handleLlmResponse(response)
-            }?.onFailure { error ->
-                messages = messages + AppChatMessage("에러 발생: ${error.message}", false)
+        val captureService = repository.getCaptureService()
+        captureService?.startAgentLoop(repository, resultCode, data)
+        viewModelScope.launch {
+            captureService?.agentResultFlow?.collect { result ->
+                result.onSuccess { response ->
+                    handleLlmResponse(response)
+                }.onFailure { error ->
+                    showError(error)
+                }
             }
         }
+
     }
 
     /**
@@ -65,9 +68,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
             result.onSuccess { response ->
                 handleLlmResponse(response)
-            }.onFailure { error ->
-                messages = messages + AppChatMessage("에러 발생: ${error.message}", false)
-            }
+            }.onFailure { error -> showError(error) }
             isLoading = false
         }
     }
@@ -108,7 +109,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             }
             "ERROR" -> {
                 responseText = response.message ?: "응답 에러 텍스트 없음"
-                Log.e("ChatViewModel", "LLM 텍스트 응답: $responseText")
+                Log.e("ChatViewModel", "LLM 텍스트 ERROR 응답: $responseText")
             }
             else -> {
                 responseText = "알 수 없는 응답 유형: ${response.type}"
@@ -118,4 +119,9 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         val llmMessage = AppChatMessage(responseText, false)
         messages = messages + llmMessage
     }
+
+    private fun showError(error: Throwable){
+        messages = messages + AppChatMessage("에러 발생: ${error.message}", false)
+    }
+
 }

@@ -19,4 +19,10 @@ object ActionController {
     suspend fun emitActionResult(success: Boolean) {
         _actionResultFlow.emit(success)
     }
+
+    var uiDumpProvider: (() -> String)? = null
+
+    fun getLatestUiHierarchy(): String {
+        return uiDumpProvider?.invoke() ?: "<error>UI Provider not registered</error>"
+    }
 }
