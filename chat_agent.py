@@ -35,6 +35,8 @@ from dotenv import load_dotenv
 load_dotenv()
 console = Console()
 
+MAX_TEXT_HISTORY = 20
+
 FunctionResponseT = dict
 
 # 사용자 지정 앱 조작 함수
@@ -109,6 +111,32 @@ class ChatAgent:
             ],
         )
 
+    def _prune_history(self):
+        """[성능 최적화] 히스토리가 너무 길어지면 오래된 대화를 삭제"""
+        # Sliding Window 방식
+        # 현재 버전에서는 단순히 가장 오래된 user/model 턴을 제거
+
+        # TODO:시스템 프롬프트나 중요한 초기 설정이 있다면 그 인덱스는 건너뛰어야 함
+        #   _contents[0]이 시스템 프롬프트라고 가정하거나, 
+        #   Gemini SDK는 config에 system_instruction이 따로 있으므로 _contents는 순수 대화일 수도 있습니다.
+        
+        current_length = len(self._contents)
+
+        # 오래된 앞부분 삭제
+        if current_length > MAX_TEXT_HISTORY:
+            # User-Model 쌍 유지를 위해 짝수 단위로 삭제
+            remove_count = current_length - MAX_TEXT_HISTORY
+
+            # 짝수로 맞춤
+            if remove_count % 2 != 0: 
+                remove_count += 1
+            
+            # List 슬라이싱으로 삭제
+            self._contents = self._contents[remove_count:]
+            
+            if self._verbose:
+                print(f"[ChatAgent] 히스토리 정리: 오래된 {remove_count}개 턴 삭제됨.")
+
     def process_query(self, query: str) -> Dict[str, Any]:
         """/chat/query 에서 호출"""
         
@@ -117,6 +145,8 @@ class ChatAgent:
         self._last_cu_action_json = None
         
         self._contents.append(Content(role="user", parts=[Part(text=query)]))
+        
+        self._prune_history()
         
         status = self.run_one_iteration()
         
@@ -159,9 +189,18 @@ class ChatAgent:
         else: # RESPONSE or ERROR
             self._cu_task_in_progress = False 
             self._last_cu_action_json = None
+
+            if cu_result["type"] == "RESPONSE":
+                self._contents.append(
+                    Content(
+                        role="user", 
+                        parts=[Part(text=f"[System] 앱 조작 완료 결과: {cu_result['message']}")]
+                    )
+                )
             # TODO: CUAgent의 최종 응답(cu_result)을 ChatAgent의 LLM에게 알려 
             # 더 친절한 사용자용 응답(self.final_reasoning)을 생성하도록 run_one_iteration()을 한 번 더 호출.
             # (현재는 CUAgent의 응답을 바로 반환)
+            # TODO: 그런데 CUAgent의 응답도 충분히 친절함. -> 위의 로직을 반드시 추가할 필요는 없어보임
 
         return cu_result
     
@@ -244,10 +283,12 @@ class ChatAgent:
         try:
             response = self.get_model_response()
         except Exception as e:
+            print(f"[ChatAgent] Error in run_one_iteration: {e}")
             return "COMPLETE"
 
         if not response.candidates:
-            raise ValueError("Response has no candidates!")
+            print("[ChatAgent] Response has no candidates!")
+            return "COMPLETE"
 
         candidate = response.candidates[0]
         if candidate.content:
@@ -271,7 +312,10 @@ class ChatAgent:
         fc_result = self.handle_action(function_calls[0])
 
         self._contents.append(
-            Content(role="user", parts=[FunctionResponse(name=function_calls[0].name, response=fc_result)])
+            Content(
+                role="user", 
+                parts=[Part(function_response=FunctionResponse(name=function_calls[0].name, response=fc_result))]
+            )
         )
         return "CONTINUE"
 

@@ -24,7 +24,7 @@ def get_or_create_agent(session_id: str) -> ChatAgent:
         )
         chat_agent = ChatAgent(
             cu_agent=cu_agent,
-            model_name='gemini-2.5-flash',
+            model_name='gemini-3-flash-preview',
             verbose=True
         )
         SESSION_STORE[session_id] = chat_agent
