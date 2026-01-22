@@ -15,7 +15,7 @@ app = FastAPI()
 # 프로덕션에서는 Redis나 DB 사용
 # 서버 재시작 시 초기화되는 임시 메모리 저장소
 SESSION_STORE: Dict[str, ChatAgent] = {}
-SCREENSHOT_SAVE_DIR = "./my_screenshots"
+
 
 def get_or_create_agent(session_id: str) -> ChatAgent:
     """세션 ID에 해당하는 에이전트를 반환하거나 새로 생성합니다."""
@@ -80,9 +80,20 @@ async def chat_step(
 
     screenshot_bytes = await screenshot.read()
 
+    # Activity Logging
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    try:
+        log_dir = SCREENSHOT_SAVE_DIR if SCREENSHOT_SAVE_DIR and os.path.exists(SCREENSHOT_SAVE_DIR) else "."
+        log_path = os.path.join(log_dir, "activity_log.txt")
+        
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] Session: {session_id} | Activity: {activity}\n")
+    except Exception as e:
+        print(f"[Server] Failed to log activity: {e}")
+
     if SCREENSHOT_SAVE_DIR:
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            # Timestamp generated above
             filename = f"screenshot_{session_id}_{timestamp}.png"
             filepath = os.path.join(SCREENSHOT_SAVE_DIR, filename)
             with open(filepath, "wb") as f:

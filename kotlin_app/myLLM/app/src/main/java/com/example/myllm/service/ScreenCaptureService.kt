@@ -34,6 +34,8 @@ import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.repository.ChatRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import okhttp3.Response
 import kotlin.coroutines.resume
@@ -70,19 +72,27 @@ class ScreenCaptureService : Service() {
     // 루프 실행을 위한 Job 관리
     private var agentJob: Job? = null
 
+    // AgentResponseDto결과를 받기 위한 SharedFlow
+    private val _agentResultFlow = MutableSharedFlow<Result<AgentResponseDto>>()
+    val agentResultFlow = _agentResultFlow.asSharedFlow()
+
     /**
      * Background에서 실행하기 위해 serviceScope에서 iteration을 실행하는 함수
      */
-    fun startAgentLoop(repository: ChatRepository, resultCode: Int, data: Intent): Result<AgentResponseDto>? {
+    fun startAgentLoop(repository: ChatRepository, resultCode: Int, data: Intent) {
         // 이미 실행 중인 루프가 있다면 취소
         agentJob?.cancel()
 
-        var response: Result<AgentResponseDto>? = null
         agentJob = serviceScope.launch {
-            response = repository.startAgentIteration(resultCode, data)
+            val result = repository.startAgentIteration(resultCode, data)
+            if (result != null) {
+                Log.d("ScreenCaptureService-LoopEnd", "$result")
+                _agentResultFlow.emit(result) // 결과가 나오면 Flow에 흘려보냄
+            }
+            else{
+                Log.e("ScreenCaptureService-LoopEnd", "$result")
+            }
         }
-        Log.d("ScreenCaptureService-LoopEnd", "$response")
-        return response
     }
 
     private val binder = LocalBinder()
@@ -171,7 +181,7 @@ class ScreenCaptureService : Service() {
                 val bitmap = processImage(image)
                 synchronized(bitmapLock) {
                     // 이전 비트맵 메모리 해제 (선택 사항)
-                    // latestBitmap?.recycle()
+                     latestBitmap?.recycle()
                     latestBitmap = bitmap
                 }
 //                Log.d("ScreenCaptureService", "bitmap successfully captured: $image")

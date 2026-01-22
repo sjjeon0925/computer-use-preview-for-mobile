@@ -5,8 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Bitmap
+import android.graphics.Rect
 import android.os.IBinder
 import android.util.Log
+import android.view.accessibility.AccessibilityNodeInfo
 import com.example.myllm.data.Action
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.network.NetworkClient
@@ -27,6 +29,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
+import java.io.OutputStream
 
 class ChatRepository(private val context: Context) {
     private var captureService: ScreenCaptureService? = null
@@ -84,7 +87,7 @@ class ChatRepository(private val context: Context) {
             if(captureTry > 4) break
 
             // 2. 서버 전송
-            result = uploadScreenCapture(bitmap!!)
+            result = uploadScreenCaptureAndWindowHierachy(bitmap!!)
             result.onSuccess { response ->
                 Log.d("AgentIteration", "uploadScreenCapture() result is $response")
                 // 3. 종료 조건 확인 (예: 서버가 종료 응답을 보냄)
@@ -132,19 +135,14 @@ class ChatRepository(private val context: Context) {
     }
 
     // 스크린샷 이미지와 컨텍스트를 서버로 업로드 (Service에서 호출)
-    suspend fun uploadScreenCapture(bitmap: Bitmap): Result<AgentResponseDto> {
+    suspend fun uploadScreenCaptureAndWindowHierachy(bitmap: Bitmap): Result<AgentResponseDto> {
         return try {
             // Bitmap을 MultipartBody.Part로 변환
             val filePart = bitmapToMultipartPart(bitmap)
 
             // Activity 컨텍스트를 포함
-            val contextstr = """
-                <state>
-                    <foreground_app>${AppState.currentPackageName}</foreground_app>
-                    <timestamp>${System.currentTimeMillis()}</timestamp>
-                </state>
-            """.trimIndent()
-            val contextBody = contextstr.toRequestBody("text/plain".toMediaTypeOrNull())
+            val uiXmlString = ActionController.getLatestUiHierarchy()
+            val contextBody = uiXmlString.toRequestBody("text/plain".toMediaTypeOrNull())
             val sessionIdBody = UserService.getUserId().toRequestBody("text/plain".toMediaTypeOrNull())
 
             val agentResponse = NetworkClient.service.sendStepMultipart(filePart, contextBody,
@@ -153,7 +151,7 @@ class ChatRepository(private val context: Context) {
             if(agentResponse.isSuccessful){
                 val body = agentResponse.body()
                 if(body != null){
-                    Log.i("ChatRepository", "Image Form 전송 성공: ${body.message}")
+                    Log.i("ChatRepository", "Image Form 전송 성공: agentResponse.body: ${body.message}")
                     Result.success(body)
                 }else{
                     Result.failure(Exception("Empty Response"))
@@ -204,8 +202,9 @@ class ChatRepository(private val context: Context) {
             "click_at" -> {
                 val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
-                Log.i("ChatRepository", "ClickAt: ($x, $y)")
-                Action.ClickAt(x, y)
+                val scaledCoord = scaleCoordinates(x, y, context)
+                Log.i("ChatRepository", "ClickAt: ($x, $y), scaled: ($scaledCoord)")
+                Action.ClickAt(scaledCoord.first, scaledCoord.second)
             }
             
             // 텍스트 입력 액션
@@ -213,8 +212,9 @@ class ChatRepository(private val context: Context) {
                 val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 val text = dto.args?.get("text")?.jsonPrimitive?.contentOrNull ?: ""
-                Log.i("ChatRepository", "ClickAndTypeText: ($x, $y) text='$text'")
-                Action.ClickAndTypeText(x, y, text)
+                val scaledCoord = scaleCoordinates(x, y, context)
+                Log.i("ChatRepository", "ClickAndTypeText: ($x, $y), scaled: ($scaledCoord), text='$text'")
+                Action.ClickAndTypeText(scaledCoord.first, scaledCoord.second, text)
             }
             
             // 스크롤 액션
@@ -252,8 +252,9 @@ class ChatRepository(private val context: Context) {
             "long_press_at" -> {
                 val x = dto.args?.get("x")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
                 val y = dto.args?.get("y")?.jsonPrimitive?.contentOrNull?.toFloatOrNull() ?: 0f
-                Log.i("ChatRepository", "PerformLongPress: ($x, $y)")
-                Action.PerformLongPress(x, y)
+                val scaledCoord = scaleCoordinates(x, y, context)
+                Log.i("ChatRepository", "PerformLongPress: ($x, $y), scaled: ($scaledCoord)")
+                Action.PerformLongPress(scaledCoord.first, scaledCoord.second)
             }
             
             // 텍스트 찾아 스크롤
@@ -296,7 +297,11 @@ class ChatRepository(private val context: Context) {
             }
         }
     }
-    
+
+    // =========================
+    // myLLM의 AccessibilityService 내부 혹은 유틸리티 클래스
+    // =========================
+
     /**
      * 앱 이름(한글/영문)을 Android 패키지명으로 변환
      */
@@ -323,6 +328,21 @@ class ChatRepository(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun scaleCoordinates(agentX: Float, agentY: Float, context: Context): Pair<Float, Float> {
+        // 1. 기기의 실제 화면 해상도 가져오기
+        val displayMetrics = context.resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+
+        // 2. 비율 계산 및 변환 (Float 연산 후 Int로 반올림)
+        val realX = (agentX / 1000.0 * screenWidth).toFloat()
+        val realY = (agentY / 1000.0 * screenHeight).toFloat()
+
+        Log.d("ChatRepository", "좌표 변환: ($agentX, $agentY) -> ($realX, $realY) [해상도: ${screenWidth}x${screenHeight}]")
+
+        return Pair(realX, realY)
     }
 
 

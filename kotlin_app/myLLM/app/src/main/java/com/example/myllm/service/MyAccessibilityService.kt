@@ -2,119 +2,33 @@ package com.example.myllm.service
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
-import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import com.example.myllm.AccessibilityActions
 import com.example.myllm.data.Action
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 
-class MyClickService : AccessibilityService() {
+class MyAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private var isScrollingToText = false
 
-    private val gestureReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == AccessibilityActions.ACTION_PERFORM_GESTURE) {
-                when (intent.getStringExtra(AccessibilityActions.GESTURE_TYPE)) {
-
-                    AccessibilityActions.GESTURE_CLICK -> {
-                        val x = intent.getFloatExtra(AccessibilityActions.EXTRA_X, 0f)
-                        val y = intent.getFloatExtra(AccessibilityActions.EXTRA_Y, 0f)
-                        Log.d("MyClickService", "명령 수신: 클릭 ($x, $y)")
-                        clickAt(x, y)
-                    }
-
-                    AccessibilityActions.GESTURE_TYPE_TEXT -> {
-                        val text = intent.getStringExtra(AccessibilityActions.EXTRA_TEXT) ?: ""
-                        val x = intent.getFloatExtra(AccessibilityActions.EXTRA_X, 0f)
-                        val y = intent.getFloatExtra(AccessibilityActions.EXTRA_Y, 0f)
-                        Log.d("MyClickService", "명령 수신: 클릭 ($x, $y) 후 타이핑 ($text)")
-                        clickAndTypeText(x, y, text)
-                    }
-
-                    AccessibilityActions.GESTURE_SCROLL -> {
-                        val scrollUp = intent.getBooleanExtra(AccessibilityActions.EXTRA_SCROLL_UP, true)
-                        val direction = if (scrollUp) "위로" else "아래로"
-                        Log.d("MyClickService", "명령 수신: 스크롤 ($direction)")
-                        performScroll(scrollUp)
-                    }
-
-                    AccessibilityActions.GESTURE_GO_BACK -> {
-                        Log.d("MyClickService", "명령 수신: 뒤로 가기")
-                        performGoBack()
-                    }
-
-                    AccessibilityActions.GESTURE_OPEN_APP -> {
-                        val pkgName = intent.getStringExtra(AccessibilityActions.EXTRA_PACKAGE_NAME) ?: ""
-                        Log.d("MyClickService", "명령 수신: 앱 실행 ($pkgName)")
-                        performOpenApp(pkgName)
-                    }
-
-                    AccessibilityActions.GESTURE_GO_HOME -> {
-                        Log.d("MyClickService", "명령 수신: 홈으로 가기")
-                        performGoHome()
-                    }
-
-                    AccessibilityActions.GESTURE_SCROLL_TO_TEXT -> {
-                        val text = intent.getStringExtra(AccessibilityActions.EXTRA_TEXT) ?: ""
-                        Log.d("MyClickService", "명령 수신: 텍스트($text) 찾아 스크롤")
-                        performScrollToText(text)
-                    }
-                    AccessibilityActions.GESTURE_LONG_PRESS -> {
-                        val x = intent.getFloatExtra(AccessibilityActions.EXTRA_X, 0f)
-                        val y = intent.getFloatExtra(AccessibilityActions.EXTRA_Y, 0f)
-                        Log.d("MyClickService", "명령 수신: 롱 클릭 ($x, $y)")
-                        performLongPress(x, y)
-                    }
-                    AccessibilityActions.GESTURE_SWIPE_HORIZONTAL -> {
-                        val swipeRight = intent.getBooleanExtra(AccessibilityActions.EXTRA_SWIPE_RIGHT, false)
-                        val direction = if (swipeRight) "오른쪽" else "왼쪽"
-                        Log.d("MyClickService", "명령 수신: 좌우 스와이프 ($direction)")
-                        performHorizontalSwipe(swipeRight)
-                    }
-                    AccessibilityActions.GESTURE_WAIT -> {
-                        val duration = intent.getLongExtra(AccessibilityActions.EXTRA_DURATION_MS, 5000L)
-                        Log.d("MyClickService", "명령 수신: $duration ms 대기")
-                        performWait(duration)
-                    }
-                    AccessibilityActions.GESTURE_RUN_MACRO -> {
-                        // ArrayList<String> 형태로 명령어 리스트를 받음
-                        val commands = intent.getStringArrayListExtra(AccessibilityActions.EXTRA_MACRO_COMMANDS)
-                        if (commands != null) {
-                            Log.d("MyClickService", "명령 수신: 매크로 실행 $commands")
-                            performMacro(commands) // ⭐️ 새 함수 호출
-                        } else {
-                            Log.e("MyClickService", "매크로 실행 실패: 명령어 리스트가 null입니다.")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     override fun onServiceConnected() {
         super.onServiceConnected()
-        
-        // BroadcastReceiver 대신 Flow를 구독
+
+        ActionController.uiDumpProvider = {
+            dumpUiHierarchy(rootInActiveWindow)
+        }
         // ChatRepository에서 SharedFlow로 실행함
         serviceScope.launch {
             ActionController.actionFlow.collect { action ->
@@ -571,14 +485,42 @@ class MyClickService : AccessibilityService() {
         }
     }
 
+    fun dumpUiHierarchy(node: AccessibilityNodeInfo?, depth: Int = 0): String {
+        if (node == null || depth > 3) return ""
+
+        val sb = StringBuilder()
+        val indent = "  ".repeat(depth)
+        val bounds = Rect()
+        node.getBoundsInScreen(bounds)
+
+        // 에이전트가 인식하기 좋은 속성들을 추출
+        sb.append("$indent<node ")
+        sb.append("resource-id=\"${node.viewIdResourceName ?: ""}\" ")
+        sb.append("class=\"${node.className ?: ""}\" ")
+        sb.append("text=\"${node.text ?: ""}\" ")
+        sb.append("content-desc=\"${node.contentDescription ?: ""}\" ")
+        sb.append("clickable=\"${node.isClickable}\" ")
+        sb.append("bounds=\"[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]\" ")
+        sb.append(">\n")
+
+        // 자식 노드 탐색
+        for (i in 0 until node.childCount) {
+            sb.append(dumpUiHierarchy(node.getChild(i), depth + 1))
+        }
+
+        sb.append("$indent</node>\n")
+        return sb.toString()
+    }
+
+
     override fun onInterrupt() {
         Log.d("MyClickService", "서비스 중단됨. UI 명령 수신 종료.")
-//        unregisterReceiver(gestureReceiver)
         serviceScope.cancel()
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        ActionController.uiDumpProvider = null
         serviceScope.cancel()
     }
 

@@ -1,4 +1,4 @@
-package com.example.myllm.view.screens // ⬅️ [중요] 패키지 선언
+package com.example.myllm.view.screens
 
 import android.app.Activity
 import android.content.Context
