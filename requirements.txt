@@ -9,3 +9,4 @@ dotenv
 uvicorn
 fastapi
 python-multipart
+opencv-python

@@ -5,15 +5,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Bitmap
-import android.graphics.Rect
 import android.os.IBinder
 import android.util.Log
-import android.view.accessibility.AccessibilityNodeInfo
 import com.example.myllm.data.Action
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.network.NetworkClient
 import com.example.myllm.service.ActionController
-import com.example.myllm.service.AppState
 import com.example.myllm.service.ScreenCaptureService
 import com.example.myllm.service.UserService
 import kotlinx.coroutines.CompletableDeferred
@@ -337,8 +334,8 @@ class ChatRepository(private val context: Context) {
         val screenHeight = displayMetrics.heightPixels
 
         // 2. 비율 계산 및 변환 (Float 연산 후 Int로 반올림)
-        val realX = (agentX / 1000.0 * screenWidth).toFloat()
-        val realY = (agentY / 1000.0 * screenHeight).toFloat()
+        val realX = (agentX / ScreenCaptureService.scale).toFloat()
+        val realY = (agentY / ScreenCaptureService.scale).toFloat()
 
         Log.d("ChatRepository", "좌표 변환: ($agentX, $agentY) -> ($realX, $realY) [해상도: ${screenWidth}x${screenHeight}]")
 
