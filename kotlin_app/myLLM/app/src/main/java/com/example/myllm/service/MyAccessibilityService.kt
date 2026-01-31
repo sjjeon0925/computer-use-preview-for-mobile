@@ -17,17 +17,31 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.lang.System.console
 
 class MyAccessibilityService : AccessibilityService() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private var isScrollingToText = false
+    // for xml parsetree
+
+    data class nodeInfo(
+        val viewIdResourceName: String?,
+        val classname: CharSequence?,
+        val text: CharSequence?,
+        val contentDescription: CharSequence?,
+        var bounds: Rect?) {
+    }
+    private val treeSearchArray = mutableListOf<nodeInfo>()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
 
         ActionController.uiDumpProvider = {
-            dumpUiHierarchy(rootInActiveWindow)
+            dumpUiHierarchyInXmlTree(rootInActiveWindow)
+//            dumpUiHierarchyInArray(rootInActiveWindow)
+//            val answer = uiHierarchyarrayToString(treeSearchArray)
+//            answer
         }
         // ChatRepository에서 SharedFlow로 실행함
         serviceScope.launch {
@@ -485,8 +499,8 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun dumpUiHierarchy(node: AccessibilityNodeInfo?, depth: Int = 0): String {
-        if (node == null || depth > 3) return ""
+    private fun dumpUiHierarchyInXmlTree(node: AccessibilityNodeInfo?, depth: Int = 0): String {
+        if (node == null || depth > 4) return ""
 
         val sb = StringBuilder()
         val indent = "  ".repeat(depth)
@@ -500,15 +514,55 @@ class MyAccessibilityService : AccessibilityService() {
         sb.append("text=\"${node.text ?: ""}\" ")
         sb.append("content-desc=\"${node.contentDescription ?: ""}\" ")
         sb.append("clickable=\"${node.isClickable}\" ")
+        sb.append("editable=\"${node.isEditable}\" ")
         sb.append("bounds=\"[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]\" ")
         sb.append(">\n")
 
         // 자식 노드 탐색
         for (i in 0 until node.childCount) {
-            sb.append(dumpUiHierarchy(node.getChild(i), depth + 1))
+            sb.append(dumpUiHierarchyInXmlTree(node.getChild(i), depth + 1))
         }
 
         sb.append("$indent</node>\n")
+        return sb.toString()
+    }
+
+    private fun dumpUiHierarchyInArray(node: AccessibilityNodeInfo?, depth: Int = 0){
+        if (node == null) return
+        // 루트노드
+        if (depth == 0) {
+            treeSearchArray.clear()
+        }
+        if (depth < 4 || node.isClickable || node.isEditable)
+        {
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            val newNode = nodeInfo(node.viewIdResourceName, node.className, node.text, node.contentDescription, rect)
+
+            treeSearchArray.add(newNode)
+        }
+        for (i in 0 until node.childCount) {
+            dumpUiHierarchyInArray(node.getChild(i), depth + 1)
+        }
+    }
+
+    private fun uiHierarchyarrayToString(searchTreeResult: MutableList<nodeInfo>): String {
+        val sb = StringBuilder()
+        Log.d("dumpUiHierarchyInString", "${searchTreeResult.size}, ${searchTreeResult.first()}")
+        sb.append("<ui_elements>\n")
+        for(node in searchTreeResult){
+            // 에이전트가 인식하기 좋은 속성들을 추출
+            val bounds = node.bounds ?: Rect(0,0,0,0)
+            sb.append("<node ")
+            sb.append("resource-id=\"${node.viewIdResourceName ?: ""}\" ")
+            sb.append("class=\"${node.classname ?: ""}\" ")
+            sb.append("text=\"${node.text ?: ""}\" ")
+            sb.append("content-desc=\"${node.contentDescription ?: ""}\" ")
+            sb.append("bounds=\"[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]\" ")
+            sb.append(">\n")
+            sb.append("</node>\n")
+        }
+        sb.append("</ui_elements>")
         return sb.toString()
     }
 

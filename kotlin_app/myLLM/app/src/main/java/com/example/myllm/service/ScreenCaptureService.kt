@@ -53,7 +53,9 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
 
     // 화면 크기 및 DPI 정보
-    val scale = 0.5f
+    companion object{
+        val scale: Float = 0.5f
+    }
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
     private var screenDensityDpi: Int = 0
