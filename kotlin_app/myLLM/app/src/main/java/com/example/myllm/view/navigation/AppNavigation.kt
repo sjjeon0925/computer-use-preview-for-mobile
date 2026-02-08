@@ -1,5 +1,7 @@
 package com.example.myllm.view.navigation // ⬅️ [중요] 패키지 선언
 
+import android.os.Build
+import androidx.annotation.RequiresApi
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.navigation.compose.NavHost
@@ -17,6 +19,7 @@ object AppRoutes {
 }
 
 // Jetpack Navigation 설정
+@RequiresApi(Build.VERSION_CODES.S)
 @Composable
 fun AppNavigation() {
     val navController = rememberNavController()
@@ -39,6 +42,7 @@ fun AppNavigation() {
     }
 }
 
+@RequiresApi(Build.VERSION_CODES.S)
 @Preview
 @Composable
 fun AppNavigationPreview() {

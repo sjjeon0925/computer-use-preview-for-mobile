@@ -38,10 +38,11 @@ class MyAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
 
         ActionController.uiDumpProvider = {
-            dumpUiHierarchyInXmlTree(rootInActiveWindow)
+            val answer = dumpUiHierarchyInXmlTree(rootInActiveWindow)
 //            dumpUiHierarchyInArray(rootInActiveWindow)
 //            val answer = uiHierarchyarrayToString(treeSearchArray)
-//            answer
+//            println(answer)
+            answer
         }
         // ChatRepository에서 SharedFlow로 실행함
         serviceScope.launch {
@@ -499,8 +500,16 @@ class MyAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun String.escapeXml(): String {
+        return this.replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+            .replace("'", "&apos;")
+    }
+
     private fun dumpUiHierarchyInXmlTree(node: AccessibilityNodeInfo?, depth: Int = 0): String {
-        if (node == null || depth > 4) return ""
+        if (node == null) return ""
 
         val sb = StringBuilder()
         val indent = "  ".repeat(depth)
@@ -509,10 +518,10 @@ class MyAccessibilityService : AccessibilityService() {
 
         // 에이전트가 인식하기 좋은 속성들을 추출
         sb.append("$indent<node ")
-        sb.append("resource-id=\"${node.viewIdResourceName ?: ""}\" ")
-        sb.append("class=\"${node.className ?: ""}\" ")
-        sb.append("text=\"${node.text ?: ""}\" ")
-        sb.append("content-desc=\"${node.contentDescription ?: ""}\" ")
+        sb.append("resource-id=\"${(node.viewIdResourceName ?: "").escapeXml()}\" ")
+        sb.append("class=\"${(node.className?.toString() ?: "").escapeXml()}\" ")
+        sb.append("text=\"${(node.text?.toString() ?: "").escapeXml()}\" ")
+        sb.append("content-desc=\"${(node.contentDescription?.toString() ?: "").escapeXml()}\" ")
         sb.append("clickable=\"${node.isClickable}\" ")
         sb.append("editable=\"${node.isEditable}\" ")
         sb.append("bounds=\"[${bounds.left},${bounds.top}][${bounds.right},${bounds.bottom}]\" ")
