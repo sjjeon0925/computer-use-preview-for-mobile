@@ -136,9 +136,6 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    // isCapturing 변수로 캡쳐 실행
-    // false: 캡쳐, true면 캡쳐 중
-    // MediaProjection 객체 생성해서 캡쳐
     override fun onBind(intent: Intent?): IBinder = binder
 
     fun initializeProjection(resultCode: Int, data: Intent){

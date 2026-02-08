@@ -1,4 +1,5 @@
 # server-image.py
+from argparse import Action
 import uvicorn
 import os
 import argparse
@@ -83,19 +84,27 @@ async def chat_step(
             "message": f"세션을 찾을 수 없습니다 (ID: {session_id}). /chat/query를 먼저 호출해주세요."
         }
 
-    screenshot_bytes = await screenshot.read()
-    marked_image_bytes, ui_description = generate_som_image(screenshot_bytes, activity, SCREENSHOT_RESOLUTION_SCALE)
-
     # Activity Logging
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
+    screenshot_bytes = await screenshot.read()
+    marked_image_bytes, ui_description = generate_som_image(screenshot_bytes, activity, SCREENSHOT_RESOLUTION_SCALE)
+
     os.makedirs("captures", exist_ok=True)
-    
-    # 기존 원본 저장 방식 유지
-    orig_filename = f"captures/{session_id}_{timestamp}_orig.jpg"
-    with open(orig_filename, "wb") as f:
+
+    # xml 디버깅용 로그 파일
+    if ui_description == "UI info not available":
+        os.makedirs("xml_log", exist_ok=True)
+        som_filename = f"xml_log/{session_id}_{timestamp}_som.txt"
+        with open(som_filename, "w", encoding="utf-16") as f:
+            print("=============== 왜 이럴까? =========================")
+            f.write(f"{activity}")
+            
+    # 이미지 저장
+    filename = f"captures/{session_id}_{timestamp}.jpg"
+    with open(filename, "wb") as f:
         f.write(screenshot_bytes)
-        
+
     # [추가] SoM 이미지 저장 (기존 방식과 동일하게 저장)
     som_filename = f"captures/{session_id}_{timestamp}_som.jpg"
     with open(som_filename, "wb") as f:
@@ -107,7 +116,7 @@ async def chat_step(
     print(f"[Server] Response: {response_data}")
     return response_data
 
-def generate_som_image(screenshot_bytes, activity_info, scale = 1.0):
+def generate_som_image(screenshot_bytes, activity_info: str, scale = 1.0):
     nparr = np.frombuffer(screenshot_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     marked_img = img.copy()
@@ -124,16 +133,11 @@ def generate_som_image(screenshot_bytes, activity_info, scale = 1.0):
     for node in root.iter('node'):
         text = node.get('text', '').strip()
         content_desc = node.get('content-desc', '').strip()
-        is_clickable = node.get('clickable', '').strip()
-        is_editable = node.get('editable', '').strip()
     
         if text or content_desc:
             bounds = parse_bounds(node.get('bounds'), scale)
             left, top, right, bottom = bounds
-            
-            if is_clickable or is_editable:
-                continue
-            
+                        
             # 너무 작은 요소(노이즈) 제외
             if (right - left) < 10 or (bottom - top) < 10:
                 continue
@@ -149,10 +153,11 @@ def generate_som_image(screenshot_bytes, activity_info, scale = 1.0):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # 에이전트에게 보낼 텍스트 설명 리스트
-            ui_elements_desc.append(f"""Index {index}: {{\"text\": \"{text}\", \"content_description\": \"{content_desc}\", \"bounds\": \"[{left}, {top}][{right}, {bottom}]\", \"editable\": \"{is_editable}\"}}""")
+            ui_elements_desc.append(f"""Index {index}: {{\"text\": \"{text}\", \"content_description\": \"{content_desc}\", \"bounds\": \"[{left}, {top}][{right}, {bottom}]\"}}""")
             index += 1
 
     _, buffer = cv2.imencode('.jpg', marked_img)
+    print(f"ui_elements_desc: {"\n".join(ui_elements_desc)}")
     return buffer.tobytes(), "\n".join(ui_elements_desc)
 
 def parse_bounds(bounds_str: str, scale=1.0):
@@ -213,7 +218,7 @@ def do_debug(scale: float = 1.0):
     print(f"scale: {scale}")
 
     test_xml = ""
-    with open("test.xml", "r") as f:
+    with open("test.xml", "r", encoding="utf-16") as f:
         test_xml = f.readlines()
         test_xml = "".join(test_xml)
 
@@ -225,7 +230,8 @@ def do_debug(scale: float = 1.0):
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-    som_filename = f"./test_{timestamp}_som.jpg"
+    os.makedirs("captures", exist_ok=True)
+    som_filename = f"./captures/test_{timestamp}_som.jpg"
     with open(som_filename, "wb") as f:
         f.write(marked_image_bytes)
     print(ui_description)

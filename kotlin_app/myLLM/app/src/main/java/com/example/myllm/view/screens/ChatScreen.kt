@@ -1,11 +1,16 @@
 package com.example.myllm.view.screens
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -26,7 +32,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -34,10 +39,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -45,65 +53,84 @@ import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.repository.ChatRepository
+import com.example.myllm.service.SpeechManager
 import com.example.myllm.ui.theme.MyLLMTheme
 import com.example.myllm.viewmodel.ChatViewModel
 
-class ChatViewModelFactory(private val context: Context) : ViewModelProvider.Factory {
+@RequiresApi(Build.VERSION_CODES.S)
+class ChatViewModelFactory(private val context: Context, val isPreview: Boolean = false) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         val repository = ChatRepository(context)
-        return ChatViewModel(repository) as T
+        val speechManager = if(isPreview) null else SpeechManager(context)
+        return ChatViewModel(repository, speechManager) as T
     }
 }
 
 // 채팅 화면 Composable
+@RequiresApi(Build.VERSION_CODES.S)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(navController: NavController) {
     val context = LocalContext.current
-    val chatViewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory(context.applicationContext))
+    val isPreview = LocalInspectionMode.current
 
-    val userInput = chatViewModel.userInput
-    val messages = chatViewModel.messages
-    val isLoading = chatViewModel.isLoading
+    val viewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory(context, isPreview))
 
-    val mediaProjectionManager = remember {
-        context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+    val userInput = viewModel.userInput
+    val messages = viewModel.messages
+    val isLoading = viewModel.isLoading
+
+    val mediaProjectionManager :MediaProjectionManager? = remember {
+        if(isPreview) null
+        else context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
     }
 
     // 런처 정의: 시스템 팝업을 띄우고, 사용자가 승인했는지 거절했는지에 대한 결과(Intent data)를 받을 통로 정의.
     // rememberLauncherForActivityResult: 외부 액티비티로부터 결과를 받아오기 위한 Contract 객체
-    val screenCaptureLauncher = rememberLauncherForActivityResult(
+    val CapturePermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             Log.d("ChatScreen", "MediaProjection 권한 승인됨. 서비스 시작 요청.")
-            chatViewModel.onProjectionPermissionResult(resultCode = result.resultCode, data = result.data!!) // 앞 조건문에서 result.data != null 확인했으니
+            viewModel.onProjectionPermissionResult(resultCode = result.resultCode, data = result.data!!)
         } else {
             Log.e("ChatScreen", "MediaProjection 권한 거부됨.")
             // TODO: 권한 거부 시 로딩 상태 해제 등의 추가 처리 필요 (ViewModel에서 처리할 수도 있음)
         }
-        chatViewModel.onCaptureRequestHandled()
+        viewModel.onCaptureRequestHandled()
     }
 
     // LaunchedEffect: Compose 화면이 나타날 때(또는 특정 변수가 변할 때) 실행되는 Coroutine 블록,
     // isCaptureRequested의 변화에 반응
-    LaunchedEffect(chatViewModel.isCaptureRequested) {
-        if (chatViewModel.isCaptureRequested) {
-            Log.d("ChatScreen", "ViewModel 플래그 감지: 스크린샷 권한 요청 시작.")
+    LaunchedEffect(viewModel.isCaptureRequested) {
+        if (viewModel.isCaptureRequested) {
+            Log.d("ChatScreen", "ViewModel isCaptureRequested 플래그 감지: 스크린샷 권한 요청 시작.")
 
             // MediaProjectionManager를 통해 권한 요청 Intent 생성
-            val intent = mediaProjectionManager.createScreenCaptureIntent()
-            screenCaptureLauncher.launch(intent)
+            val intent = mediaProjectionManager?.createScreenCaptureIntent()
+            CapturePermissionLauncher.launch(intent)
+        }
+    }
+
+    val SpeechPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            // 권한 허용 시 바로 STT 시작
+            viewModel.speechManager?.startSTT(continuous = true, callingFromOut = true)
+        } else {
+            // 권한 거부 시 안내 (Toast 등)
+            Toast.makeText(context, "마이크 권한이 필요합니다.", Toast.LENGTH_SHORT).show()
         }
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            CenterAlignedTopAppBar(
                 title = { Text("LLM 채팅") },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로 가기")
+                        Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "뒤로 가기")
                     }
                 }
             )
@@ -125,6 +152,38 @@ fun ChatScreen(navController: NavController) {
                     ChatBubble(message)
                 }
             }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ){
+                Button(
+                    onClick = {
+                        val permissionCheck = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        ) == PackageManager.PERMISSION_GRANTED
+
+                        if (permissionCheck) {
+                            // 이미 권한이 있으면 바로 시작
+                            viewModel.speechManager?.startSTT(continuous = true, true)
+                        } else {
+                            // 권한이 없으면 요청
+                            SpeechPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                        viewModel.processAndSendText(userInput)
+                    }
+                ){
+                    Text("녹음 시작")
+                }
+                Button(
+                    onClick = {
+                        viewModel.speechManager?.stopSTT()
+                    }
+                ){
+                    Text("녹음 종료")
+                }
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -132,7 +191,7 @@ fun ChatScreen(navController: NavController) {
             ) {
                 TextField(
                     value = userInput,
-                    onValueChange = { chatViewModel.updateUserInput(it) },
+                    onValueChange = { viewModel.updateUserInput(it) },
                     modifier = Modifier
                         .weight(1f)
                         .padding(end = 8.dp),
@@ -141,7 +200,11 @@ fun ChatScreen(navController: NavController) {
                 )
                 Button(
                     onClick = {
-                        chatViewModel.processAndSendText(userInput)
+                        val permissionCheck = ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.RECORD_AUDIO
+                        )
+                        viewModel.processAndSendText(userInput)
                     },
                     enabled = userInput.isNotBlank() && !isLoading,
                     modifier = Modifier.align(Alignment.CenterVertically)
@@ -187,6 +250,7 @@ fun ChatBubble(message: AppChatMessage) {
 // 프리뷰
 @Preview(showBackground = true)
 @Composable
+@RequiresApi(Build.VERSION_CODES.S)
 fun ChatScreenPreview() {
     MyLLMTheme {
         ChatScreen(navController = rememberNavController())

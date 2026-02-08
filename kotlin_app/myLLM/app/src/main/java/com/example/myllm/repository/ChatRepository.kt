@@ -26,7 +26,6 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.ByteArrayOutputStream
-import java.io.OutputStream
 
 class ChatRepository(private val context: Context) {
     private var captureService: ScreenCaptureService? = null
@@ -92,7 +91,10 @@ class ChatRepository(private val context: Context) {
                     "ACTION" -> {
                         // 4. 액션 실행 및 완료 대기
                         val success = processActionAndWait(response)
-                        if (!success) Log.w("ChatRepository", "액션 실행 실패")
+                        if (!success) {
+                            Log.w("ChatRepository", "액션 실행 실패")
+                            onFailInIteration("액션 실행 대기 중 타임아웃 발생")
+                        }
                     }
                     "RESPONSE" -> {
                         shouldContinue = false
@@ -102,6 +104,7 @@ class ChatRepository(private val context: Context) {
                     }
                 }
             }.onFailure {
+                onFailInIteration(errorMsg = "스크린샷 업로드 통신 오류")
                 shouldContinue = false
             }
         }
@@ -154,7 +157,7 @@ class ChatRepository(private val context: Context) {
                     Result.failure(Exception("Empty Response"))
                 }
             }else{
-                Log.e("ChatRepository", "Image Form 전송 실패: ${agentResponse.code()}")
+                Log.e("ChatRepository", "Image Form 응답 오류: ${agentResponse.code()}")
                 Result.failure(Exception("Upload Failed: ${agentResponse.code()}"))
             }
         } catch (e: Exception) {
@@ -190,6 +193,11 @@ class ChatRepository(private val context: Context) {
             job.cancel()
         }
     }
+
+    private suspend fun onFailInIteration(errorMsg: String = "", e: Exception? = null){
+        processUserMessage("[system] iteration 중 실행 실패했습니다. Error: ${e?.message ?: errorMsg}")
+    }
+
 
     private fun parseAction(dto: AgentResponseDto) : Action {
         Log.d("ChatRepository", "Parsing action: ${dto.action}, args: ${dto.args}")
