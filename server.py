@@ -19,7 +19,7 @@ def get_or_create_agent(session_id: str) -> ChatAgent:
         print(f"\n[Server] New session created: {session_id}")
         # 세션별로 독립적인 CUAgent와 ChatAgent를 생성
         cu_agent = CUAgent(
-            model_name='gemini-2.5-computer-use-preview-10-2025',
+            model_name='gemini-3-flash-preview',
             verbose=True
         )
         chat_agent = ChatAgent(
