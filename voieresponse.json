@@ -1,0 +1,49 @@
+{
+    "setupComplete": {
+        "sessionId": "ad90db53-fed9-47fb-8633-35bd571c5b97"
+    }
+}'
+{
+    "toolCall": {
+        "functionCalls": [
+            {
+                "name": "execute_mobile_task",
+                "args": {
+                    "task_description": "\xeb\xb6\x80\xec\x82\xb0 \xeb\x82\xa0\xec\x94\xa8 \xed\x99\x95\xec\x9d\xb8\xed\x95\xb4 \xec\xa4\x98"
+                }
+            }
+        ]
+    }
+}'
+{
+    "serverContent": {
+        "generationComplete": true
+    }
+}'
+{
+    "serverContent": {
+        "turnComplete": true,
+        "groundingMetadata": {}
+    },
+    "usageMetadata": {
+        "promptTokenCount": 43,
+        "candidatesTokenCount": 16,
+        "totalTokenCount": 59,
+        "promptTokensDetails": [
+            {
+                "modality": "TEXT",
+                "tokenCount": 3
+            },
+            {
+                "modality": "AUDIO",
+                "tokenCount": 40
+            }
+        ],
+        "candidatesTokensDetails": [
+            {
+                "modality": "TEXT",
+                "tokenCount": 16
+            }
+        ]
+    }
+}'

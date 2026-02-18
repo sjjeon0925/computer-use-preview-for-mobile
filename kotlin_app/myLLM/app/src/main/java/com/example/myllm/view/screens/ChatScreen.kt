@@ -1,6 +1,7 @@
 package com.example.myllm.view.screens
 
 import android.Manifest
+import android.R.attr.enabled
 import android.app.Activity
 import android.content.Context
 import android.content.pm.PackageManager
@@ -48,12 +49,12 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.repository.ChatRepository
-import com.example.myllm.service.SpeechManager
 import com.example.myllm.ui.theme.MyLLMTheme
 import com.example.myllm.viewmodel.ChatViewModel
 
@@ -61,8 +62,7 @@ import com.example.myllm.viewmodel.ChatViewModel
 class ChatViewModelFactory(private val context: Context, val isPreview: Boolean = false) : ViewModelProvider.Factory {
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         val repository = ChatRepository(context)
-        val speechManager = if(isPreview) null else SpeechManager(context)
-        return ChatViewModel(repository, speechManager) as T
+        return ChatViewModel(repository) as T
     }
 }
 
@@ -117,7 +117,7 @@ fun ChatScreen(navController: NavController) {
     ) { isGranted ->
         if (isGranted) {
             // 권한 허용 시 바로 STT 시작
-            viewModel.speechManager?.startSTT(continuous = true, callingFromOut = true)
+            viewModel.startStreaming()
         } else {
             // 권한 거부 시 안내 (Toast 등)
             Toast.makeText(context, "마이크 권한이 필요합니다.", Toast.LENGTH_SHORT).show()
@@ -166,20 +166,23 @@ fun ChatScreen(navController: NavController) {
 
                         if (permissionCheck) {
                             // 이미 권한이 있으면 바로 시작
-                            viewModel.speechManager?.startSTT(continuous = true, true)
+                            viewModel.startStreaming()
                         } else {
                             // 권한이 없으면 요청
                             SpeechPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
-                        viewModel.processAndSendText(userInput)
-                    }
+                    },
+                        enabled = !(viewModel.isRecording) && !isLoading, // 이미 스트리밍 중이면 비활성화
+                        modifier = Modifier.weight(1f).padding(8.dp)
                 ){
                     Text("녹음 시작")
                 }
                 Button(
                     onClick = {
-                        viewModel.speechManager?.stopSTT()
-                    }
+                        viewModel.stopStreaming()
+                    },
+                    enabled = viewModel.isRecording, // 스트리밍 중일 때만 종료 가능
+                    modifier = Modifier.weight(1f).padding(8.dp)
                 ){
                     Text("녹음 종료")
                 }
@@ -200,10 +203,6 @@ fun ChatScreen(navController: NavController) {
                 )
                 Button(
                     onClick = {
-                        val permissionCheck = ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.RECORD_AUDIO
-                        )
                         viewModel.processAndSendText(userInput)
                     },
                     enabled = userInput.isNotBlank() && !isLoading,

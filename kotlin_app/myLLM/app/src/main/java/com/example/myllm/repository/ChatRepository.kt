@@ -198,7 +198,6 @@ class ChatRepository(private val context: Context) {
         processUserMessage("[system] iteration 중 실행 실패했습니다. Error: ${e?.message ?: errorMsg}")
     }
 
-
     private fun parseAction(dto: AgentResponseDto) : Action {
         Log.d("ChatRepository", "Parsing action: ${dto.action}, args: ${dto.args}")
         

@@ -13,12 +13,12 @@ import androidx.lifecycle.viewModelScope
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.repository.ChatRepository
-import com.example.myllm.service.SpeechManager
+import com.example.myllm.service.VoiceAgentManager
 import kotlinx.coroutines.launch
 import kotlin.collections.plus
 
 @RequiresApi(Build.VERSION_CODES.S)
-class ChatViewModel(private val repository: ChatRepository, val speechManager: SpeechManager?) : ViewModel() {
+class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
     // 상태 (State) 정의: UI가 관찰할 데이터
     var userInput by mutableStateOf("")
@@ -29,12 +29,43 @@ class ChatViewModel(private val repository: ChatRepository, val speechManager: S
         private set
     var isCaptureRequested by mutableStateOf(false)
         private set
-
+    var isRecording by mutableStateOf(false)
+        private set
     fun onCaptureRequestHandled() {
         isCaptureRequested = false
     }
     fun updateUserInput(newInput: String) {
         userInput = newInput
+    }
+
+    private val voiceManager = VoiceAgentManager(
+        onTaskTriggered = { taskDesc ->
+            viewModelScope.launch {
+                // 1. UI 상태 업데이트
+                isLoading = true
+                messages = messages + AppChatMessage("음성 인식: $taskDesc", true)
+
+                // 2. 이미 권한이 있다면 바로 CUAgent 실행 (REQUIRE_SCREENSHOT 모사)
+                // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
+                isCaptureRequested = true
+                Log.d("ChatViewModel", "Voice-triggered Task: $taskDesc")
+            }
+        },
+        onResponseReceived = { response ->
+            viewModelScope.launch {
+                messages = messages + AppChatMessage(response, false)
+            }
+        }
+    )
+
+    fun startStreaming(){
+        isRecording = true
+        voiceManager.startStreaming()
+    }
+
+    fun stopStreaming(){
+        isRecording = false
+        voiceManager.stopStreaming()
     }
 
     fun onProjectionPermissionResult(resultCode: Int, data: Intent){
@@ -52,12 +83,6 @@ class ChatViewModel(private val repository: ChatRepository, val speechManager: S
         }
     }
 
-    init {
-        speechManager?.onMessageReady = { text: String ->
-            Log.d("ChatViewModel", "Recognized text: $text")
-            processAndSendText(text)
-        }
-    }
     /**
      * 텍스트 메시지를 처리하고 전송합니다.
      */

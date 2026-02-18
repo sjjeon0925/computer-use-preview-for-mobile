@@ -10,3 +10,5 @@ uvicorn
 fastapi
 python-multipart
 opencv-python
+requests>=2.31.0
+websockets>=12.0
