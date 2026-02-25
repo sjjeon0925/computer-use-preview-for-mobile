@@ -16,7 +16,8 @@ import asyncio
 import google.auth
 from google.auth.transport.requests import Request
 from datetime import datetime
-from fastapi import FastAPI, File, UploadFile, Form, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, UploadFile, Form 
+from fastapi import WebSocket, WebSocketDisconnect
 from typing import Optional, Dict, Any
 
 from chat_agent import ChatAgent
@@ -221,7 +222,11 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
     location = "us-central1" # 환경에 맞게 수정
     service_url = f"wss://{location}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"
     
-    headers = {"Authorization": f"Bearer {bearer_token}"}
+    headers = {
+        "Content-Type": "application/json",
+        "output_audio_transcription": {},
+        "Authorization": f"Bearer {bearer_token}"
+        }
     ssl_context = ssl.create_default_context(cafile=certifi.where())
 
     try:
@@ -255,13 +260,22 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
 
             async def handle_gemini_to_client():
                 """Gemini 응답 분석 및 Task 트리거"""
+                
                 async for response in gemini_ws:
+                    # 일반 음성/텍스트 응답 전달
+                    # if isinstance(response, bytes):
+                    #     decoded_message = response.decode('utf-8')
+                    # else:
+                    #     decoded_message = response
                     data = json.loads(response)
-                    print(data)
-                    
-                    # 1. Function Call 확인 (Task 실행 트리거)
-                    # if "tool_call" in data:
-                    #     call = data["tool_call"]["function_calls"][0]
+                        
+                    await websocket.send_text(json.loads(data))
+                    print(json.loads(data))
+
+
+                    # Function Call 확인 (Task 실행 트리거)
+                    # if "tool_call" in data or "toolCall" in data:
+                    #     call = data["toolCall"]["functionCalls"][0]
                     #     if call["name"] == "execute_mobile_task":
                     #         task_msg = call["args"]["task_description"]
                     #         print(f"[WS] Task Triggered: {task_msg}")
@@ -275,9 +289,6 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
                             
                     #         chat_agent.process_query(task_msg)
                     #         continue
-
-                    # 2. 일반 음성/텍스트 응답 전달
-                    await websocket.send_text(response)
 
             await asyncio.gather(handle_client_to_gemini(), handle_gemini_to_client())
 

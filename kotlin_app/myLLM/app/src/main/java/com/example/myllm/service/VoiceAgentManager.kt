@@ -5,12 +5,13 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import com.example.myllm.service.UserService
+import androidx.annotation.Nullable
+import kotlinx.serialization.json.*
 import okhttp3.*
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import kotlinx.serialization.json.*
 import java.util.concurrent.TimeUnit
+
 
 class VoiceAgentManager(
     private val serverUrl: String = "ws://10.0.2.2:8000/ws/voice/",
@@ -38,35 +39,38 @@ class VoiceAgentManager(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                Log.d("VoiceAgent", "WebSocket Connected")
                 startAudioCapture()
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                val json = Json.parseToJsonElement(text).jsonObject
-                Log.d("webSocket onMessage", json.toString())
+                try{
+                    val json = Json.parseToJsonElement(text).jsonObject
+                    Log.d("webSocket onMessage", json.toString())
 
-                // 서버에서 보낸 제어 신호 감지
-//                if (json["type"]?.jsonPrimitive?.content == "CONTROL") {
-//                    if (json["action"]?.jsonPrimitive?.content == "START_TASK") {
-//                        val taskDesc = json["message"]?.jsonPrimitive?.content ?: "Task Start"
-//                        stopStreaming() // Task 수행 중 마이크 일시 중지
-//                        onTaskTriggered(taskDesc)
-//                    }
-//                } else {
-//                    // 일반 응답 처리
-//                    onResponseReceived(json["message"]?.jsonPrimitive?.content ?: "")
-//                }
+                    // 서버에서 보낸 제어 신호 감지
+                    if (json["type"]?.jsonPrimitive?.content == "CONTROL") {
+                        if (json["action"]?.jsonPrimitive?.content == "START_TASK") {
+                            val taskDesc = json["message"]?.jsonPrimitive?.content ?: "Task Start"
+                            stopStreaming() // Task 수행 중 마이크 일시 중지
+                            onTaskTriggered(taskDesc)
+                        }
+                    } else {
+                        // 일반 응답 처리
+                        onResponseReceived(json["message"]?.jsonPrimitive?.content ?: "")
+                    }
+                }catch (e: Exception){
+                    Log.e("VoiceAgent", "Error parsing line: $text", e)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e("VoiceAgent", "Connection Failed: ${t.message}")
+                Log.e("webSocket onFailure", "Connection Failed: ${t.message}")
             }
         })
     }
 
     @SuppressLint("MissingPermission")
-    private fun startAudioCapture() {
+    fun startAudioCapture() {
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             sampleRate, channelConfig, audioFormat, bufferSize
