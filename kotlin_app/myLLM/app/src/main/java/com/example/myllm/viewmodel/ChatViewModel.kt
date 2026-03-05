@@ -3,7 +3,6 @@ package com.example.myllm.viewmodel
 import android.content.Intent
 import android.os.Build
 import android.util.Log
-import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -43,7 +42,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             viewModelScope.launch {
                 // 1. UI 상태 업데이트
                 isLoading = true
-                messages = messages + AppChatMessage("음성 인식: $taskDesc", true)
+                messages = messages + AppChatMessage(taskDesc, true, true)
 
                 // 2. 이미 권한이 있다면 바로 CUAgent 실행 (REQUIRE_SCREENSHOT 모사)
                 // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
@@ -51,10 +50,13 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                 Log.d("ChatViewModel", "Voice-triggered Task: $taskDesc")
             }
         },
-        onResponseReceived = { response ->
+        OnChatMessage = { response: String, isUser: Boolean->
             viewModelScope.launch {
-                messages = messages + AppChatMessage(response, false)
+                messages = messages + AppChatMessage(response, isUser, true)
             }
+        },
+        OnStopStreaming = {
+            stopStreaming()
         }
     )
 
@@ -89,8 +91,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
     fun processAndSendText(currentInput: String) {
         if (currentInput.isBlank() || isLoading) return
 
-        val userMessage = AppChatMessage(currentInput, true)
-        messages = messages + userMessage
+        messages = messages + AppChatMessage(currentInput, true)
         userInput = ""
 
         viewModelScope.launch {
