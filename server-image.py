@@ -248,20 +248,13 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
             await gemini_ws.send(json.dumps(setup_msg))
 
             async def handle_client_to_gemini():
-                """클라이언트 음성 데이터를 Gemini로 전달"""
-                async for message in websocket.iter_bytes():
-                    # message는 안드로이드에서 보낸 PCM 오디오 바이트
-                    b64_data = base64.b64encode(message).decode('utf-8')
-
-                    audio_frame = {
-                        "realtime_input": {
-                            "media_chunks": [{
-                                "data": b64_data, # 예시 포맷
-                                "mime_type": "audio/pcm"
-                            }]
-                        }
-                    }
-                    await gemini_ws.send(json.dumps(audio_frame))
+                """클라이언트 메시지를 Gemini로 그대로 proxy
+                클라이언트(Kotlin)가 이미 올바른 Gemini Live API JSON 형식으로 만들어 전송함:
+                  - 음성: {"realtime_input": {"media_chunks": [{"data": "<base64>", "mime_type": "audio/pcm"}]}}
+                  - 텍스트: {"client_content": {"turns": [...], "turn_complete": true}}
+                """
+                async for message in websocket.iter_text():
+                    await gemini_ws.send(message)
 
             async def handle_gemini_to_client():
                 """Gemini 응답을 파싱하여 타입별로 클라이언트에 전달"""
@@ -362,7 +355,7 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
         print(f"[WS] Session {session_id}: Error Type - {type(e).__name__}")
         print(f"[WS] Session {session_id}: Error Detail - {e}")
     finally:
-        if 'gemini_ws' in locals() and not gemini_ws.closed:
+        if 'gemini_ws' in locals() and gemini_ws.close_code is None:
             await gemini_ws.close()
         print(f"[WS] Session {session_id}: Resources cleaned up")
 

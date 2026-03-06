@@ -14,8 +14,8 @@ import kotlinx.serialization.json.*
 import okhttp3.*
 import okio.ByteString.Companion.toByteString
 import android.util.Base64
+import okio.ByteString
 import java.util.concurrent.TimeUnit
-
 
 class VoiceAgentManager(
     private val serverUrl: String = "ws://10.0.2.2:8000/ws/voice/",
@@ -37,6 +37,7 @@ class VoiceAgentManager(
     private val audioFormat = AudioFormat.ENCODING_PCM_16BIT
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
 
+    // STT 스크립트
     private var InputAudioTranscript = ""
     private var OutputAudioTranscript = ""
 
@@ -140,7 +141,7 @@ class VoiceAgentManager(
             while (isStreaming) {
                 val read = audioRecord?.read(buffer, 0, buffer.size) ?: 0
                 if (read > 0) {
-                    webSocket?.send(buffer.copyOfRange(0, read).toByteString())
+                    sendByteStringOnWebSocket(buffer.copyOfRange(0, read).toByteString())
                 }
             }
         }.start()
@@ -149,7 +150,6 @@ class VoiceAgentManager(
     private fun parsingResponse(text: String) {
         try {
             val json = Json.parseToJsonElement(text).jsonObject
-            Log.d("webSocket onMessage", json.toString())
 
             when (json["type"]?.jsonPrimitive?.content) {
                 "SETUP_COMPLETE" -> {
@@ -157,7 +157,6 @@ class VoiceAgentManager(
                     OutputAudioTranscript = ""
                 }
                 "CONTROL" -> {
-                    handleControl(json)
                     if (json["action"]?.jsonPrimitive?.content == "START_TASK") {
                         val taskDesc = json["message"]?.jsonPrimitive?.content ?: "Task Start"
                         OnStopStreaming()
@@ -213,7 +212,18 @@ class VoiceAgentManager(
         pendingAudioChunks.add(pcmBytes)
     }
 
-    private fun handleControl(json: JsonObject) {}
+    fun sendTextOnWebSocket(message: String){
+        val jsonString = "{\"client_content\": {\"turns\": [{\"role\": \"user\",\"parts\": [{ \"text\": \"$message\" }]}],\"turn_complete\": \"true\" } }"
+        webSocket?.send(jsonString)
+    }
+
+    fun sendByteStringOnWebSocket(byteString: ByteString) {
+        // PCM 바이트를 base64로 인코딩 후 Gemini Live API 포맷의 JSON 문자열로 전송
+        // 서버는 이 JSON을 그대로 Gemini에 proxy함
+        val b64 = Base64.encodeToString(byteString.toByteArray(), Base64.NO_WRAP)
+        val json = """{"realtime_input":{"media_chunks":[{"data":"$b64","mime_type":"audio/pcm"}]}}"""
+        webSocket?.send(json)
+    }
 
     fun stopStreaming() {
         isStreaming = false

@@ -40,7 +40,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
     private val voiceManager = VoiceAgentManager(
         onTaskTriggered = { taskDesc ->
             viewModelScope.launch {
-                // 1. UI 상태 업데이트
                 isLoading = true
                 messages = messages + AppChatMessage(taskDesc, true, true)
 
@@ -48,6 +47,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                 // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
                 isCaptureRequested = true
                 Log.d("ChatViewModel", "Voice-triggered Task: $taskDesc")
+
             }
         },
         OnChatMessage = { response: String, isUser: Boolean->
@@ -87,12 +87,19 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
     /**
      * 텍스트 메시지를 처리하고 전송합니다.
+     * 녹음 사용 -> ChatAgent에게 보냄.
+     * 녹음 사용 안 함 -> WebSocket으로 멀티모달 에이전트에게 보냄
      */
     fun processAndSendText(currentInput: String) {
         if (currentInput.isBlank() || isLoading) return
 
         messages = messages + AppChatMessage(currentInput, true)
         userInput = ""
+
+        if(isRecording){
+            voiceManager.sendTextOnWebSocket(currentInput)
+            return
+        }
 
         viewModelScope.launch {
             isLoading = true

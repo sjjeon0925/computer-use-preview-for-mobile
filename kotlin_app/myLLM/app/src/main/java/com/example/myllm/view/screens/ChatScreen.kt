@@ -221,14 +221,10 @@ fun ChatBubble(message: AppChatMessage) {
     val alignment = if (message.isUser) Arrangement.End else Arrangement.Start
     val bubbleColor =
         if (message.isUser)
-            if(message.isSpeech) Color.Magenta else Color(0xFF5DB0FE)
+            if(message.isSpeech) Color(0xFFFE7F5C) else Color(0xFF5DB0FE)
         else
-            if(message.isSpeech) Color.Blue else Color(0xFFE0E0E0)
-    val textColor =
-        if (message.isUser)
-            if(message.isSpeech) Color.Yellow else Color.White
-        else
-            if(message.isSpeech) Color.Cyan else Color.Black
+            if(message.isSpeech) Color(0xffc3c3c3) else Color(0xFFE0E0E0)
+    val textColor = if (message.isUser) Color.White else Color.Black
 
     Row(
         modifier = Modifier
