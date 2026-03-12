@@ -1,4 +1,4 @@
-package com.example.myllm.service
+package com.example.myllm.repository
 
 import android.annotation.SuppressLint
 import android.media.AudioAttributes
@@ -8,20 +8,41 @@ import android.media.AudioRecord
 import android.media.AudioTrack
 import android.media.MediaRecorder
 import android.os.Build
+import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresApi
-import kotlinx.serialization.json.*
-import okhttp3.*
-import okio.ByteString.Companion.toByteString
-import android.util.Base64
+import com.example.myllm.service.UserService
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okio.ByteString
+import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
+
+// MyRepository에서 sharedFlow로 데이터를 전달할때 사용하는 sealed class
+// VoiceAgentManager -> MyRespository -> ChatViewModel -> 각종 UI로 반영
+sealed class VoiceEvent {
+    data class TaskTriggered(val tackDesc: String): VoiceEvent()
+    data class ChatMessage(val response: String, val isUser: Boolean): VoiceEvent()
+    object StopStreaming: VoiceEvent()
+}
 
 class VoiceAgentManager(
     private val serverUrl: String = "ws://10.0.2.2:8000/ws/voice/",
-    private val onTaskTriggered: (String) -> Unit,
-    private val OnChatMessage: (String, Boolean) -> Unit,
-    private val OnStopStreaming: () -> Unit
+    private val onTaskTriggered: suspend (String) -> Unit,
+    private val OnChatMessage: suspend (String, Boolean) -> Unit,
+    private val OnStopStreaming: suspend () -> Unit
 ) {
     private var client: OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -30,6 +51,7 @@ class VoiceAgentManager(
     private var webSocket: WebSocket? = null
     private var audioRecord: AudioRecord? = null
     var isStreaming = false
+    private val webSocketScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     // 마이크 입력 설정 (Gemini Live API 권장)
     private val sampleRate = 16000
@@ -117,11 +139,15 @@ class VoiceAgentManager(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                parsingResponse(text)
+                webSocketScope.launch {
+                    parsingResponse(text)
+                }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                OnChatMessage("Connection Failed: ${t.message}", false)
+                webSocketScope.launch {
+                    OnChatMessage("Connection Failed: ${t.message}", false)
+                }
                 Log.e("webSocket onFailure", "Connection Failed: ${t.message}")
             }
         })
@@ -147,7 +173,7 @@ class VoiceAgentManager(
         }.start()
     }
 
-    private fun parsingResponse(text: String) {
+    private suspend fun parsingResponse(text: String) {
         try {
             val json = Json.parseToJsonElement(text).jsonObject
 
@@ -191,6 +217,10 @@ class VoiceAgentManager(
                         OnChatMessage(OutputAudioTranscript, false)
                         OutputAudioTranscript = ""
                     }
+                }
+                "RESPONSE" -> {
+                    val message = json["message"]?.jsonPrimitive?.contentOrNull
+
                 }
                 else -> {
                     Log.d("VoiceAgent", "Unknown type: ${json["type"]}")

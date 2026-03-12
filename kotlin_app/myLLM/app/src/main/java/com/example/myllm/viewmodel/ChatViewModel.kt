@@ -1,5 +1,6 @@
 package com.example.myllm.viewmodel
 
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
@@ -8,16 +9,54 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.repository.ChatRepository
-import com.example.myllm.service.VoiceAgentManager
+import com.example.myllm.repository.VoiceEvent
 import kotlinx.coroutines.launch
 import kotlin.collections.plus
 
 @RequiresApi(Build.VERSION_CODES.S)
 class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
+    companion object {
+        class ChatViewModelFactory(private val context: Context, val isPreview: Boolean): ViewModelProvider.Factory {
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                val repository = ChatRepository(context)
+                return ChatViewModel(repository) as T
+            }
+        }
+    }
+
+    init {
+        viewModelScope.launch {
+            repository.voiceEvent.collect { voiceEvent ->
+                when(voiceEvent) {
+                    is VoiceEvent.TaskTriggered -> {
+                        isLoading = true
+                        messages = messages + AppChatMessage(voiceEvent.tackDesc, true, isSpeech = true)
+
+                        // 2. 이미 권한이 있다면 바로 CUAgent 실행 (REQUIRE_SCREENSHOT 모사)
+                        // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
+                        isCaptureRequested = true
+                        Log.d("ChatViewModel", "Voice-triggered Task: $voiceEvent.tackDesc")
+                    }
+                    is VoiceEvent.ChatMessage -> {
+                        val response = voiceEvent.response
+                        val isUser = voiceEvent.isUser
+                        messages = messages + AppChatMessage(response, isUser, true)
+                    }
+                    is VoiceEvent.StopStreaming -> {
+                        stopStreaming()
+                    }
+                    else -> {
+                        Log.e("voiceEvent Collect", "Unknown VoiceEvent")
+                    }
+                }
+            }
+        }
+    }
 
     // 상태 (State) 정의: UI가 관찰할 데이터
     var userInput by mutableStateOf("")
@@ -37,52 +76,24 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         userInput = newInput
     }
 
-    private val voiceManager = VoiceAgentManager(
-        onTaskTriggered = { taskDesc ->
-            viewModelScope.launch {
-                isLoading = true
-                messages = messages + AppChatMessage(taskDesc, true, true)
-
-                // 2. 이미 권한이 있다면 바로 CUAgent 실행 (REQUIRE_SCREENSHOT 모사)
-                // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
-                isCaptureRequested = true
-                Log.d("ChatViewModel", "Voice-triggered Task: $taskDesc")
-
-            }
-        },
-        OnChatMessage = { response: String, isUser: Boolean->
-            viewModelScope.launch {
-                messages = messages + AppChatMessage(response, isUser, true)
-            }
-        },
-        OnStopStreaming = {
-            stopStreaming()
-        }
-    )
-
     fun startStreaming(){
         isRecording = true
-        voiceManager.startStreaming()
+        repository.startStreaming()
     }
 
     fun stopStreaming(){
         isRecording = false
-        voiceManager.stopStreaming()
+        repository.stopStreaming()
     }
 
     fun onProjectionPermissionResult(resultCode: Int, data: Intent){
-        Log.d("ChatViewModel", "repository.startAgentIteration resultCode: ($resultCode), Data: ($data)")
         val captureService = repository.getCaptureService()
-        captureService?.startAgentLoop(repository, resultCode, data)
-        viewModelScope.launch {
-            captureService?.agentResultFlow?.collect { result ->
-                result.onSuccess { response ->
-                    handleLlmResponse(response)
-                }.onFailure { error ->
-                    showError(error)
-                }
+        captureService?.launchAgentLoop(
+            onIterate = { repository.startAgentIteration(resultCode, data) },
+            onResult = { result ->
+                result.onSuccess { handleLlmResponse(it) }
             }
-        }
+        )
     }
 
     /**
@@ -97,7 +108,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         userInput = ""
 
         if(isRecording){
-            voiceManager.sendTextOnWebSocket(currentInput)
+            repository.sendVoiceText(currentInput)
             return
         }
 

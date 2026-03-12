@@ -1,5 +1,6 @@
 package com.example.myllm.network
 
+import android.icu.number.Scale
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.serialization.json.Json
 import okhttp3.MediaType.Companion.toMediaType
@@ -47,6 +48,7 @@ interface ApiService {
      * 스크린샷과 XML 상태 데이터를 서버에 전송
      * @param screenshot 스크린샷 파일 (MultipartBody.Part)
      * @param activity XML/Intent 상태 정보를 담은 텍스트 부분 (RequestBody)
+     * @param scale 스크린샷 해상도 배율 DEFAULT: 0.5 (RequestBody)
      * @return Response<AgentRequest> 업로드 성공에 대한 간단한 응답
      */
     @Multipart
@@ -54,7 +56,8 @@ interface ApiService {
     suspend fun sendStepMultipart(
         @Part screenshot: MultipartBody.Part,
         @Part("activity") activity: RequestBody,
-        @Part("session_id") sessionId: RequestBody
+        @Part("session_id") sessionId: RequestBody,
+        @Part("scale") scale: RequestBody
     ): Response<AgentResponseDto>
 }
 

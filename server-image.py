@@ -1,12 +1,9 @@
 # server-image.py
+from websockets import ClientConnection
 from argparse import Action
 import uvicorn
 import os
 import argparse
-import xml.etree.ElementTree as ET
-import cv2
-import re
-import numpy as np
 import ssl
 import certifi
 import websockets
@@ -22,6 +19,7 @@ from typing import Optional, Dict, Any
 
 from chat_agent import ChatAgent
 from cu_agent import CUAgent
+import som_utils as SOM
 
 app = FastAPI()
 
@@ -29,8 +27,31 @@ app = FastAPI()
 # 프로덕션에서는 Redis나 DB 사용
 # 서버 재시작 시 초기화되는 임시 메모리 저장소
 SESSION_STORE: Dict[str, ChatAgent] = {}
-SCREENSHOT_SAVE_DIR = None
+SCREENSHOT_SAVE_DIR = "captures"
 SCREENSHOT_RESOLUTION_SCALE = 0.5
+
+# Gemini Live API에서 사용할 도구(Tool) 정의
+MOBILE_TOOL_DEFINITION = {
+    "function_declarations": [
+        {
+            "name": "execute_mobile_task",
+            "description": "사용자가 앱 실행, 검색, 설정 변경 등 모바일 기기 조작을 요청했을 때 호출합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task_description": {
+                        "type": "string",
+                        "description": "수행해야 할 작업의 구체적인 내용"
+                    }
+                },
+                "required": ["task_description"]
+            }
+        }
+    ]
+}
+PROJECT_ID = "studious-ethos-462600-n0"
+MODEL_ID = "gemini-live-2.5-flash-native-audio"
+LOCATION = "us-central1"
 
 def get_or_create_agent(session_id: str) -> ChatAgent:
     """세션 ID에 해당하는 에이전트를 반환하거나 새로 생성합니다."""
@@ -75,7 +96,8 @@ async def chat_query(
 async def chat_step(
     screenshot: UploadFile = File(...),
     activity: Optional[str] = Form(None),
-    session_id: str = Form(...)
+    session_id: str = Form(...),
+    scale: float = Form(...)
 ) -> Dict[str, Any]:
     """
     클라이언트가 서버의 요청에 따라 '스크린샷'을 전송하면,
@@ -97,9 +119,11 @@ async def chat_step(
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
     screenshot_bytes = await screenshot.read()
-    marked_image_bytes, ui_description = generate_som_image(screenshot_bytes, activity, SCREENSHOT_RESOLUTION_SCALE)
 
-    os.makedirs("captures", exist_ok=True)
+    SCREENSHOT_RESOLUTION_SCALE = scale
+    marked_image_bytes, ui_description = SOM.generate_som_image(screenshot_bytes, activity, SCREENSHOT_RESOLUTION_SCALE)
+
+    os.makedirs(SCREENSHOT_SAVE_DIR, exist_ok=True)
 
     # xml 디버깅용 로그 파일
     if ui_description == "UI info not available":
@@ -109,12 +133,12 @@ async def chat_step(
             f.write(f"{activity}")
             
     # 이미지 저장
-    filename = f"captures/{session_id}_{timestamp}.jpg"
+    filename = f"{SCREENSHOT_SAVE_DIR}/{session_id}_{timestamp}.jpg"
     with open(filename, "wb") as f:
         f.write(screenshot_bytes)
 
     # [추가] SoM 이미지 저장 (기존 방식과 동일하게 저장)
-    som_filename = f"captures/{session_id}_{timestamp}_som.jpg"
+    som_filename = f"{SCREENSHOT_SAVE_DIR}/{session_id}_{timestamp}_som.jpg"
     with open(som_filename, "wb") as f:
         f.write(marked_image_bytes)
 
@@ -123,60 +147,6 @@ async def chat_step(
 
     print(f"[Server] Response: {response_data}")
     return response_data
-
-def generate_som_image(screenshot_bytes, activity_info: str, scale = 1.0):
-    nparr = np.frombuffer(screenshot_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    marked_img = img.copy()
-
-    try:
-        root = ET.fromstring(activity_info)
-    except Exception as e:
-        print(f"XML Parsing Error: {e}")
-        return screenshot_bytes, "UI info not available"
-    
-    ui_elements_desc = []
-    index = 0
-
-    for node in root.iter('node'):
-        text = node.get('text', '').strip()
-        content_desc = node.get('content-desc', '').strip()
-    
-        if text or content_desc:
-            bounds = parse_bounds(node.get('bounds'), scale)
-            left, top, right, bottom = bounds
-                        
-            # 너무 작은 요소(노이즈) 제외
-            if (right - left) < 10 or (bottom - top) < 10:
-                continue
-
-            # 마킹 (사각형 + 숫자 인덱스)
-            cv2.rectangle(marked_img, (left, top), (right, bottom), (0, 255, 0), 2) # 초록색 박스
-            
-            label = str(index)
-            # 숫자 가독성을 위한 빨간색 배경 박스 추가
-            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(marked_img, (left, top - h - 5), (left + w, top), (0, 0, 255), -1)
-            cv2.putText(marked_img, label, (left, top - 5), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
-            # 에이전트에게 보낼 텍스트 설명 리스트
-            ui_elements_desc.append(f"""Index {index}: {{\"text\": \"{text}\", \"content_description\": \"{content_desc}\", \"bounds\": \"[{left}, {top}][{right}, {bottom}]\"}}""")
-            index += 1
-
-    _, buffer = cv2.imencode('.jpg', marked_img)
-    print(f"ui_elements_desc: {"\n".join(ui_elements_desc)}")
-    return buffer.tobytes(), "\n".join(ui_elements_desc)
-
-def parse_bounds(bounds_str: str, scale=1.0):
-    if not bounds_str:
-        return [0, 0, 0, 0]
-    pattern = r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]"
-    match = re.search(pattern, bounds_str)
-    if match:
-        return [int(int(x) * scale) for x in match.groups()]
-    else:
-        return [0, 0, 0, 0]
 
 def generate_access_token():
     """Retrieves an access token using Google Cloud default credentials."""
@@ -190,39 +160,15 @@ def generate_access_token():
         print("Make sure you're logged in with: gcloud auth application-default login")
         return None
 
-# Gemini Live API에서 사용할 도구(Tool) 정의
-MOBILE_TOOL_DEFINITION = {
-    "function_declarations": [
-        {
-            "name": "execute_mobile_task",
-            "description": "사용자가 앱 실행, 검색, 설정 변경 등 모바일 기기 조작을 요청했을 때 호출합니다.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task_description": {
-                        "type": "string",
-                        "description": "수행해야 할 작업의 구체적인 내용"
-                    }
-                },
-                "required": ["task_description"]
-            }
-        }
-    ]
-}
-PROJECT_ID = "studious-ethos-462600-n0"
-MODEL_ID = "gemini-live-2.5-flash-native-audio"
-
 @app.websocket("/ws/voice/{session_id}")
 async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
     """음성 인식을 통해 일상 대화와 Task 실행을 분기하는 엔드포인트"""
     await websocket.accept()
-    chat_agent = get_or_create_agent(session_id)
     
     # Gemini Live API 연결 설정 (Vertex AI 기준)
     bearer_token = generate_access_token()
-    location = "us-central1" # 환경에 맞게 수정
-    service_url = f"wss://{location}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"
     
+    service_url = f"wss://{LOCATION}-aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1beta1.LlmBidiService/BidiGenerateContent"
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {bearer_token}"
@@ -236,7 +182,7 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
             # 초기 설정 전송 (도구 포함)
             setup_msg = {
                 "setup": {
-                    "model": f"projects/{PROJECT_ID}/locations/{location}/publishers/google/models/{MODEL_ID}",
+                    "model": f"projects/{PROJECT_ID}/locations/{LOCATION}/publishers/google/models/{MODEL_ID}",
                     "generation_config": {
                         "response_modalities": ["AUDIO"]
                     },
@@ -247,107 +193,10 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
             }
             await gemini_ws.send(json.dumps(setup_msg))
 
-            async def handle_client_to_gemini():
-                """클라이언트 메시지를 Gemini로 그대로 proxy
-                클라이언트(Kotlin)가 이미 올바른 Gemini Live API JSON 형식으로 만들어 전송함:
-                  - 음성: {"realtime_input": {"media_chunks": [{"data": "<base64>", "mime_type": "audio/pcm"}]}}
-                  - 텍스트: {"client_content": {"turns": [...], "turn_complete": true}}
-                """
-                async for message in websocket.iter_text():
-                    await gemini_ws.send(message)
-
-            async def handle_gemini_to_client():
-                """Gemini 응답을 파싱하여 타입별로 클라이언트에 전달"""
-
-                async for response in gemini_ws:
-                    if isinstance(response, bytes):
-                        decoded_message = response.decode('utf-8')
-                    else:
-                        decoded_message = response
-
-                    try:
-                        data = json.loads(decoded_message)
-                    except json.JSONDecodeError:
-                        print(f"[WS] Non-JSON response: {decoded_message}")
-                        continue
-
-                    print(f"[WS] Raw: {data}")
-
-                    # ── 메시지 타입 파싱 (geminilive.js의 MultimodalLiveResponseMessage와 동일한 로직) ──
-
-                    server_content = data.get("serverContent", {})
-
-                    if data.get("setupComplete"):
-                        print("[WS] SETUP COMPLETE")
-                        await websocket.send_json({"type": "SETUP_COMPLETE"})
-
-                    elif server_content.get("turnComplete"):
-                        print("[WS] TURN COMPLETE")
-                        await websocket.send_json({"type": "TURN_COMPLETE"})
-
-                    elif server_content.get("interrupted"):
-                        print("[WS] INTERRUPTED")
-                        await websocket.send_json({"type": "INTERRUPTED"})
-
-                    elif server_content.get("inputTranscription"):
-                        # 사용자 음성 → 텍스트 전사 (내가 한 말)
-                        transcription = server_content["inputTranscription"]
-                        text = transcription.get("text", "")
-                        finished = transcription.get("finished", False)
-                        print(f"[WS] INPUT TRANSCRIPTION: {text} (finished={finished})")
-                        await websocket.send_json({
-                            "type": "INPUT_TRANSCRIPTION",
-                            "text": text,
-                            "finished": finished
-                        })
-
-                    elif server_content.get("outputTranscription"):
-                        # 에이전트 음성 → 텍스트 전사 (에이전트가 한 말)
-                        transcription = server_content["outputTranscription"]
-                        text = transcription.get("text", "")
-                        finished = transcription.get("finished", False)
-                        print(f"[WS] OUTPUT TRANSCRIPTION: {text} (finished={finished})")
-                        await websocket.send_json({
-                            "type": "OUTPUT_TRANSCRIPTION",
-                            "text": text,
-                            "finished": finished
-                        })
-
-                    elif data.get("toolCall"):
-                        # Function Call 처리 (Task 실행 트리거)
-                        tool_call = data["toolCall"]
-                        print(f"[WS] TOOL CALL: {tool_call}")
-                        function_calls = tool_call.get("functionCalls", [])
-                        for call in function_calls:
-                            if call.get("name") == "execute_mobile_task":
-                                task_msg = call["args"].get("task_description", "")
-                                print(f"[WS] Task Triggered: {task_msg}")
-                                await websocket.send_json({
-                                    "type": "CONTROL",
-                                    "action": "START_TASK",
-                                    "message": "작업을 시작합니다. 잠시만 기다려주세요."
-                                })
-                                chat_agent.process_query(task_msg)
-
-                    else:
-                        # 오디오 데이터 (inlineData) 또는 텍스트 파트
-                        parts = server_content.get("modelTurn", {}).get("parts", [])
-                        if parts and parts[0].get("inlineData"):
-                            audio_b64 = parts[0]["inlineData"]["data"]
-                            print("[WS] 🔊 AUDIO chunk")
-                            await websocket.send_json({
-                                "type": "AUDIO",
-                                "data": audio_b64
-                            })
-                        elif parts and parts[0].get("text"):
-                            text = parts[0]["text"]
-                            print(f"[WS] 💬 TEXT: {text}")
-                            await websocket.send_json({
-                                "type": "TEXT",
-                                "text": text
-                            })
-
-            await asyncio.gather(handle_client_to_gemini(), handle_gemini_to_client())
+            # gemini 실행
+            await asyncio.gather(
+                handle_client_to_gemini(gemini_ws=gemini_ws, ws=websocket), 
+                handle_gemini_to_client(gemini_ws=gemini_ws, ws=websocket, session_id=session_id))
 
     except WebSocketDisconnect:
         print(f"[WS] Session {session_id}: Client disconnected")
@@ -358,6 +207,127 @@ async def voice_agent_endpoint(websocket: WebSocket, session_id: str):
         if 'gemini_ws' in locals() and gemini_ws.close_code is None:
             await gemini_ws.close()
         print(f"[WS] Session {session_id}: Resources cleaned up")
+        
+async def handle_client_to_gemini(gemini_ws: ClientConnection, ws: WebSocket):
+    """
+    클라이언트 메시지를 Gemini로 그대로 proxy
+        - 음성: {"realtime_input": {"media_chunks": [{"data": "<base64>", "mime_type": "audio/pcm"}]}}
+        - 텍스트: {"client_content": {"turns": [...], "turn_complete": true}}
+    """
+    async for message in ws.iter_text():
+        await gemini_ws.send(message)
+
+async def handle_gemini_to_client(gemini_ws: ClientConnection, ws: WebSocket, session_id: str):
+    """
+    Gemini 응답을 파싱하여 타입별로 클라이언트에 전달
+    toolCall - chat_agent를 통해 task 실행
+    """
+    
+    chat_agent = get_or_create_agent(session_id)
+
+    async for response in gemini_ws:
+        if isinstance(response, bytes):
+            decoded_message = response.decode('utf-8')
+        else:
+            decoded_message = response
+
+        try:
+            data = json.loads(decoded_message)
+        except json.JSONDecodeError:
+            print(f"[WS] Non-JSON response: {decoded_message}")
+            continue
+
+        print(f"[WS] Raw: {data}")
+
+        # ── 메시지 타입 파싱 (geminilive.js의 MultimodalLiveResponseMessage와 동일한 로직) ──
+
+        server_content = data.get("serverContent", {})
+
+        if data.get("setupComplete"):
+            print("[WS] SETUP COMPLETE")
+            await ws.send_json({"type": "SETUP_COMPLETE"})
+
+        elif server_content.get("turnComplete"):
+            print("[WS] TURN COMPLETE")
+            await ws.send_json({"type": "TURN_COMPLETE"})
+
+        elif server_content.get("interrupted"):
+            print("[WS] INTERRUPTED")
+            await ws.send_json({"type": "INTERRUPTED"})
+
+        elif server_content.get("inputTranscription"):
+            # 사용자 음성 → 텍스트 전사 (내가 한 말)
+            transcription = server_content["inputTranscription"]
+            text = transcription.get("text", "")
+            finished = transcription.get("finished", False)
+            print(f"[WS] INPUT TRANSCRIPTION: {text} (finished={finished})")
+            await ws.send_json({
+                "type": "INPUT_TRANSCRIPTION",
+                "text": text,
+                "finished": finished
+            })
+
+        elif server_content.get("outputTranscription"):
+            # 에이전트 음성 → 텍스트 전사 (에이전트가 한 말)
+            transcription = server_content["outputTranscription"]
+            text = transcription.get("text", "")
+            finished = transcription.get("finished", False)
+            print(f"[WS] OUTPUT TRANSCRIPTION: {text} (finished={finished})")
+            await ws.send_json({
+                "type": "OUTPUT_TRANSCRIPTION",
+                "text": text,
+                "finished": finished
+            })
+
+        elif data.get("toolCall"):
+            # Function Call 처리 (Task 실행 트리거)
+            tool_call = data["toolCall"]
+            print(f"[WS] TOOL CALL: {tool_call}")
+            function_calls = tool_call.get("functionCalls", [])
+            for call in function_calls:
+                if call.get("name") == "execute_mobile_task":
+                    task_msg = call["args"].get("task_description", "")
+                    print(f"[WS] Task Triggered: {task_msg}")
+                    await ws.send_json({
+                        "type": "CONTROL",
+                        "action": "START_TASK",
+                        "message": "작업을 시작합니다. 잠시만 기다려주세요."
+                    })
+                    # 작업 실행
+                    response_data_in_dict = chat_agent.process_query(task_msg)
+                    response_text = response_data_in_dict["message"]
+                    json_object = {
+                        "client_content": {
+                            "turns": [
+                                {
+                                    "role":"system",
+                                    "parts": [
+                                        { "text": f"{response_text}"}
+                                    ]
+                                }
+                            ],
+                            "turn_complete":"true"
+                        }
+                    }
+                    gemini_ws.send_data(json_object)
+
+        else:
+            # 오디오 데이터 (inlineData) 또는 텍스트 파트
+            parts = server_content.get("modelTurn", {}).get("parts", [])
+            if parts and parts[0].get("inlineData"):
+                audio_b64 = parts[0]["inlineData"]["data"]
+                print("[WS] 🔊 AUDIO chunk")
+                await ws.send_json({
+                    "type": "AUDIO",
+                    "data": audio_b64
+                })
+            elif parts and parts[0].get("text"):
+                text = parts[0]["text"]
+                print(f"[WS] 💬 TEXT: {text}")
+                await ws.send_json({
+                    "type": "TEXT",
+                    "text": text
+                })
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the server with optional screenshot saving.")

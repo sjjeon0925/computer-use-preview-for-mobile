@@ -54,17 +54,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import androidx.navigation.compose.rememberNavController
 import com.example.myllm.data.AppChatMessage
-import com.example.myllm.repository.ChatRepository
 import com.example.myllm.ui.theme.MyLLMTheme
 import com.example.myllm.viewmodel.ChatViewModel
-
-@RequiresApi(Build.VERSION_CODES.S)
-class ChatViewModelFactory(private val context: Context, val isPreview: Boolean = false) : ViewModelProvider.Factory {
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        val repository = ChatRepository(context)
-        return ChatViewModel(repository) as T
-    }
-}
 
 // 채팅 화면 Composable
 @RequiresApi(Build.VERSION_CODES.S)
@@ -74,7 +65,11 @@ fun ChatScreen(navController: NavController) {
     val context = LocalContext.current
     val isPreview = LocalInspectionMode.current
 
-    val viewModel: ChatViewModel = viewModel(factory = ChatViewModelFactory(context, isPreview))
+    val viewModel: ChatViewModel = viewModel(factory = ChatViewModel.Companion.ChatViewModelFactory(
+            context,
+            isPreview
+        )
+    )
 
     val userInput = viewModel.userInput
     val messages = viewModel.messages
@@ -112,7 +107,7 @@ fun ChatScreen(navController: NavController) {
         }
     }
 
-    val SpeechPermissionLauncher = rememberLauncherForActivityResult(
+    val speechPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
@@ -169,7 +164,7 @@ fun ChatScreen(navController: NavController) {
                             viewModel.startStreaming()
                         } else {
                             // 권한이 없으면 요청
-                            SpeechPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            speechPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     },
                         enabled = !(viewModel.isRecording) && !isLoading, // 이미 스트리밍 중이면 비활성화

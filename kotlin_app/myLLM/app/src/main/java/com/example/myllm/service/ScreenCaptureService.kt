@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
-import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
@@ -28,20 +27,17 @@ import com.example.myllm.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import java.nio.ByteBuffer
-import java.util.concurrent.atomic.AtomicBoolean
 import androidx.core.graphics.createBitmap
 import com.example.myllm.network.AgentResponseDto
-import com.example.myllm.repository.ChatRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
-import okhttp3.Response
-import kotlin.coroutines.resume
 
 // 이 서비스는 화면 캡처를 위해 Foreground Service로 실행되어야 한다.
 class ScreenCaptureService : Service() {
+    companion object{
+        const val DEFAULT_SCALE = 0.5f
+    }
 
     private val TAG = "CaptureService"
     private val NOTIFICATION_CHANNEL_ID = "ScreenCaptureChannel"
@@ -53,9 +49,8 @@ class ScreenCaptureService : Service() {
     private var imageReader: ImageReader? = null
 
     // 화면 크기 및 DPI 정보
-    companion object{
-        val scale: Float = 0.5f
-    }
+    private val scale: Float = DEFAULT_SCALE
+    fun getScale(): Float { return scale }
     private var screenWidth: Int = 0
     private var screenHeight: Int = 0
     private var screenDensityDpi: Int = 0
@@ -74,25 +69,18 @@ class ScreenCaptureService : Service() {
     // 루프 실행을 위한 Job 관리
     private var agentJob: Job? = null
 
-    // AgentResponseDto결과를 받기 위한 SharedFlow
-    private val _agentResultFlow = MutableSharedFlow<Result<AgentResponseDto>>()
-    val agentResultFlow = _agentResultFlow.asSharedFlow()
-
     /**
      * Background에서 실행하기 위해 serviceScope에서 iteration을 실행하는 함수
      */
-    fun startAgentLoop(repository: ChatRepository, resultCode: Int, data: Intent) {
-        // 이미 실행 중인 루프가 있다면 취소
+    fun launchAgentLoop(
+        onIterate: suspend () -> Result<AgentResponseDto>?,
+        onResult: (Result<AgentResponseDto>) -> Unit
+    ){
         agentJob?.cancel()
-
         agentJob = serviceScope.launch {
-            val result = repository.startAgentIteration(resultCode, data)
-            if (result != null) {
-                Log.d("ScreenCaptureService-LoopEnd", "$result")
-                _agentResultFlow.emit(result) // 결과가 나오면 Flow에 흘려보냄
-            }
-            else{
-                Log.e("ScreenCaptureService-LoopEnd", "$result")
+            onIterate()?.let{
+                Log.d("ScreenCaptureService-LoopEnd", "$it")
+                onResult( it )
             }
         }
     }
@@ -183,7 +171,6 @@ class ScreenCaptureService : Service() {
                      latestBitmap?.recycle()
                     latestBitmap = bitmap
                 }
-//                Log.d("ScreenCaptureService", "bitmap successfully captured: $image")
             } catch (e: Exception) {
                 Log.e("ScreenCaptureService", "캡처 중 오류: ${e.message}")
             } finally {
@@ -216,7 +203,7 @@ class ScreenCaptureService : Service() {
         Log.i(TAG, "ScreenCaptureService onDestroy")
     }
 
-    private fun processImage(image: Image): Bitmap?{
+    private fun processImage(image: Image): Bitmap? {
 
         val scaledWidth = (screenWidth * scale).toInt()
         val scaledHeight = (screenHeight * scale).toInt()

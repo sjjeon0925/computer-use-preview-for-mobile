@@ -39,9 +39,6 @@ class MyAccessibilityService : AccessibilityService() {
 
         ActionController.uiDumpProvider = {
             val answer = dumpUiHierarchyInXmlTree(rootInActiveWindow)
-//            dumpUiHierarchyInArray(rootInActiveWindow)
-//            val answer = uiHierarchyarrayToString(treeSearchArray)
-//            println(answer)
             answer
         }
         // ChatRepository에서 SharedFlow로 실행함
