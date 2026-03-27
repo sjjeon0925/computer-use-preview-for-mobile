@@ -85,6 +85,11 @@ class ScreenCaptureService : Service() {
         }
     }
 
+    fun abortAgentLoop() {
+        agentJob?.cancel()
+        agentJob = null
+    }
+
     private val binder = LocalBinder()
     inner class LocalBinder() : Binder(){
         fun getService(): ScreenCaptureService = this@ScreenCaptureService
@@ -177,7 +182,6 @@ class ScreenCaptureService : Service() {
                 image.close()
             }
         }, Handler(Looper.getMainLooper()))
-
     }
 
     fun captureCurrentScreen(): Bitmap? {
@@ -186,7 +190,6 @@ class ScreenCaptureService : Service() {
         }
     }
 
-    // 서비스 리소스 정리
     private fun cleanupResources() {
         virtualDisplay?.release()
         mediaProjection?.stop()

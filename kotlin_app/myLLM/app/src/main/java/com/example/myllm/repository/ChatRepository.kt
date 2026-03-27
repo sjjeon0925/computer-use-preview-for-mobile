@@ -47,12 +47,6 @@ class ChatRepository(private val context: Context) {
     init {
         // Repository 생성 시점에 서비스를 바인딩
         val intent = Intent(context, ScreenCaptureService::class.java)
-        // Foreground Service라면 먼저 start 후 bind
-        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
-            context.startForegroundService(intent)
-        }else{
-            context.startService(intent)
-        }
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
@@ -67,6 +61,9 @@ class ChatRepository(private val context: Context) {
         },
         OnStopStreaming = {
             _voiceEvent.emit(VoiceEvent.StopStreaming)
+        },
+        OnAbortTask = {
+            _voiceEvent.emit(VoiceEvent.AbortTask)
         }
     )
 
@@ -74,6 +71,7 @@ class ChatRepository(private val context: Context) {
     fun startStreaming() = voiceManager.startStreaming()
     fun stopStreaming() = voiceManager.stopStreaming()
     fun sendVoiceText(text: String) = voiceManager.sendTextOnWebSocket(text)
+    fun abortAgentLoop() = captureService?.abortAgentLoop()
 
 
     suspend fun startAgentIteration(resultCode: Int, data: Intent) : Result<AgentResponseDto>? {

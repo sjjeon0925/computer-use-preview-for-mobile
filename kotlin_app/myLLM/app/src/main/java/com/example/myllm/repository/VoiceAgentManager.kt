@@ -16,6 +16,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.contentOrNull
@@ -30,21 +32,28 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 
+@Serializable
+data class SendUserInputInWebsocket(
+    val type: String,
+    val data: String?
+)
 // MyRepository에서 sharedFlow로 데이터를 전달할때 사용하는 sealed class
 // VoiceAgentManager -> MyRespository -> ChatViewModel -> 각종 UI로 반영
 sealed class VoiceEvent {
     data class TaskTriggered(val tackDesc: String): VoiceEvent()
     data class ChatMessage(val response: String, val isUser: Boolean): VoiceEvent()
     object StopStreaming: VoiceEvent()
+    object AbortTask: VoiceEvent()
 }
 
 class VoiceAgentManager(
     private val serverUrl: String = "ws://10.0.2.2:8000/ws/voice/",
     private val onTaskTriggered: suspend (String) -> Unit,
     private val OnChatMessage: suspend (String, Boolean) -> Unit,
-    private val OnStopStreaming: suspend () -> Unit
+    private val OnStopStreaming: suspend () -> Unit,
+    private val OnAbortTask: suspend () -> Unit
 ) {
-    private var client: OkHttpClient = OkHttpClient.Builder()
+    private val client: OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 
@@ -73,17 +82,18 @@ class VoiceAgentManager(
      * TURN_COMPLETE 수신 시 호출된다.
      */
     private fun playAccumulatedAudio() {
-        if (pendingAudioChunks.isEmpty()) return
+        val chunks: List<ByteArray> = synchronized(pendingAudioChunks) {
+            if (pendingAudioChunks.isEmpty()) return
+            pendingAudioChunks.toList().also { pendingAudioChunks.clear() }
+        }
 
-        // 모든 청크를 하나의 ByteArray로 합침
-        val totalSize = pendingAudioChunks.sumOf { it.size }
+        val totalSize = chunks.sumOf { it.size }
         val pcm = ByteArray(totalSize)
         var pos = 0
-        for (chunk in pendingAudioChunks) {
+        for (chunk in chunks) {
             chunk.copyInto(pcm, pos)
             pos += chunk.size
         }
-        pendingAudioChunks.clear()
 
         val minBuf = AudioTrack.getMinBufferSize(
             outputSampleRate,
@@ -120,7 +130,7 @@ class VoiceAgentManager(
 
     /** INTERRUPTED 수신 시: 누적 청크 버리고 재생 중단 */
     private fun clearPendingAudio() {
-        pendingAudioChunks.clear()
+        synchronized(pendingAudioChunks) { pendingAudioChunks.clear() }
         audioTrack?.pause()
         audioTrack?.flush()
     }
@@ -183,10 +193,15 @@ class VoiceAgentManager(
                     OutputAudioTranscript = ""
                 }
                 "CONTROL" -> {
-                    if (json["action"]?.jsonPrimitive?.content == "START_TASK") {
-                        val taskDesc = json["message"]?.jsonPrimitive?.content ?: "Task Start"
-                        OnStopStreaming()
-                        onTaskTriggered(taskDesc)
+                    when (json["action"]?.jsonPrimitive?.content) {
+                        "START_TASK" -> {
+                            val taskDesc = json["message"]?.jsonPrimitive?.content ?: "Task Start"
+                            onTaskTriggered(taskDesc)
+                        }
+                        "ABORT_TASK" -> {
+                            clearPendingAudio()
+                            OnAbortTask()
+                        }
                     }
                 }
                 "INTERRUPTED" -> {
@@ -211,7 +226,6 @@ class VoiceAgentManager(
                     }
                 }
                 "TURN_COMPLETE" -> {
-                    // 누적된 오디오 전체를 한번에 재생
                     playAccumulatedAudio()
                     if (OutputAudioTranscript.isNotEmpty()) {
                         OnChatMessage(OutputAudioTranscript, false)
@@ -239,11 +253,12 @@ class VoiceAgentManager(
             Log.e("AudioPlayer", "Base64 decode 실패: ${e.message}")
             return
         }
-        pendingAudioChunks.add(pcmBytes)
+        synchronized(pendingAudioChunks) { pendingAudioChunks.add(pcmBytes) }
     }
 
     fun sendTextOnWebSocket(message: String){
-        val jsonString = "{\"client_content\": {\"turns\": [{\"role\": \"user\",\"parts\": [{ \"text\": \"$message\" }]}],\"turn_complete\": \"true\" } }"
+        val json = SendUserInputInWebsocket(type="TEXT", data=message)
+        val jsonString = Json.encodeToString(json)
         webSocket?.send(jsonString)
     }
 
@@ -251,8 +266,9 @@ class VoiceAgentManager(
         // PCM 바이트를 base64로 인코딩 후 Gemini Live API 포맷의 JSON 문자열로 전송
         // 서버는 이 JSON을 그대로 Gemini에 proxy함
         val b64 = Base64.encodeToString(byteString.toByteArray(), Base64.NO_WRAP)
-        val json = """{"realtime_input":{"media_chunks":[{"data":"$b64","mime_type":"audio/pcm"}]}}"""
-        webSocket?.send(json)
+        val json = SendUserInputInWebsocket(type="AUDIO", data=b64)
+        val jsonString = Json.encodeToString(json)
+        webSocket?.send(jsonString)
     }
 
     fun stopStreaming() {

@@ -29,16 +29,17 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         }
     }
 
+    // task가 활성화되었는지 추적 — abort 타이밍 경쟁 방지
+    private var isTaskActive = false
+
     init {
         viewModelScope.launch {
             repository.voiceEvent.collect { voiceEvent ->
                 when(voiceEvent) {
                     is VoiceEvent.TaskTriggered -> {
+                        isTaskActive = true
                         isLoading = true
                         messages = messages + AppChatMessage(voiceEvent.tackDesc, true, isSpeech = true)
-
-                        // 2. 이미 권한이 있다면 바로 CUAgent 실행 (REQUIRE_SCREENSHOT 모사)
-                        // 기존 repository.startAgentIteration을 호출하기 위해 isCaptureRequested 활성화
                         isCaptureRequested = true
                         Log.d("ChatViewModel", "Voice-triggered Task: $voiceEvent.tackDesc")
                     }
@@ -49,6 +50,9 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                     }
                     is VoiceEvent.StopStreaming -> {
                         stopStreaming()
+                    }
+                    is VoiceEvent.AbortTask -> {
+                        abortTask()
                     }
                     else -> {
                         Log.e("voiceEvent Collect", "Unknown VoiceEvent")
@@ -87,13 +91,26 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
     }
 
     fun onProjectionPermissionResult(resultCode: Int, data: Intent){
+        if (!isTaskActive) return
         val captureService = repository.getCaptureService()
         captureService?.launchAgentLoop(
             onIterate = { repository.startAgentIteration(resultCode, data) },
             onResult = { result ->
-                result.onSuccess { handleLlmResponse(it) }
+                viewModelScope.launch {
+                    result.onSuccess { handleLlmResponse(it) }
+                    isLoading = false
+                    isTaskActive = false
+                }
             }
         )
+    }
+
+    private fun abortTask() {
+        isTaskActive = false
+        isLoading = false
+        isCaptureRequested = false
+        repository.abortAgentLoop()
+        Log.d("ChatViewModel", "Task aborted by user")
     }
 
     /**
@@ -111,17 +128,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             repository.sendVoiceText(currentInput)
             return
         }
-
-        viewModelScope.launch {
-            isLoading = true
-            Log.i("ChatViewModel", "Chat Sending request: ${currentInput}")
-            val result = repository.processUserMessage(currentInput)
-
-            result.onSuccess { response ->
-                handleLlmResponse(response)
-            }.onFailure { error -> showError(error) }
-            isLoading = false
-        }
     }
 
     // --- Private 네트워크/데이터 처리 함수 ---
@@ -131,7 +137,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         val responseText: String
 
         when (response.type) {
-            // /chat/qeury
             // 1. 일상 답변
             // 2. iteration 종료 후 결론
             "RESPONSE" -> {
@@ -140,10 +145,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                 Log.d("ChatViewModel", "LLM 텍스트 응답: $responseText")
             }
             // iteration 진입포인트
-            // isCaptureRequested를 true로 만들면
-            // 1. ChatScreen에서 스크린샷 권한 받음
-            // 2. ChatViewModel에서 repository.startAgentIteration()실행
-            // 2-1. 즉, iteration은 REQUIRE_SCREENSHOT을 답변으로 받으면 실행됨.
             "REQUIRE_SCREENSHOT" -> {
                 responseText = response.message ?: "화면을 캡처합니다..."
                 Log.d("ChatViewModel", "LLM 텍스트 응답: $responseText")
@@ -164,8 +165,10 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                 Log.e("ChatViewModel", responseText)
             }
         }
-        val llmMessage = AppChatMessage(responseText, false)
-        messages = messages + llmMessage
+        if(!isRecording){
+            val llmMessage = AppChatMessage(responseText, false)
+            messages = messages + llmMessage
+        }
     }
 
     private fun showError(error: Throwable){

@@ -186,3 +186,5 @@ my_screenshots/
 test.jpg
 test.xml
 xml_log/
+_*
+.claude/
