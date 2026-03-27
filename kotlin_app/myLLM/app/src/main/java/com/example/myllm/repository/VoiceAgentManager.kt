@@ -38,9 +38,9 @@ data class SendUserInputInWebsocket(
     val data: String?
 )
 // MyRepository에서 sharedFlow로 데이터를 전달할때 사용하는 sealed class
-// VoiceAgentManager -> MyRespository -> ChatViewModel -> 각종 UI로 반영
+// VoiceAgentManager -> ChatRepository -> ChatViewModel -> 각종 UI로 반영
 sealed class VoiceEvent {
-    data class TaskTriggered(val tackDesc: String): VoiceEvent()
+    data class TaskTriggered(val taskDesc: String): VoiceEvent()
     data class ChatMessage(val response: String, val isUser: Boolean): VoiceEvent()
     object StopStreaming: VoiceEvent()
     object AbortTask: VoiceEvent()
@@ -49,9 +49,9 @@ sealed class VoiceEvent {
 class VoiceAgentManager(
     private val serverUrl: String = "ws://10.0.2.2:8000/ws/voice/",
     private val onTaskTriggered: suspend (String) -> Unit,
-    private val OnChatMessage: suspend (String, Boolean) -> Unit,
-    private val OnStopStreaming: suspend () -> Unit,
-    private val OnAbortTask: suspend () -> Unit
+    private val onChatMessage: suspend (String, Boolean) -> Unit,
+    private val onStopStreaming: suspend () -> Unit,
+    private val onAbortTask: suspend () -> Unit
 ) {
     private val client: OkHttpClient = OkHttpClient.Builder()
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -69,8 +69,8 @@ class VoiceAgentManager(
     private val bufferSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
 
     // STT 스크립트
-    private var InputAudioTranscript = ""
-    private var OutputAudioTranscript = ""
+    private var inputAudioTranscript = ""
+    private var outputAudioTranscript = ""
 
     // ─── 오디오 출력: TURN_COMPLETE 시 한번에 재생 ────────────────────────
     private val outputSampleRate = 24000  // Gemini Live API 출력 기본값
@@ -156,7 +156,7 @@ class VoiceAgentManager(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 webSocketScope.launch {
-                    OnChatMessage("Connection Failed: ${t.message}", false)
+                    onChatMessage("Connection Failed: ${t.message}", false)
                 }
                 Log.e("webSocket onFailure", "Connection Failed: ${t.message}")
             }
@@ -189,8 +189,8 @@ class VoiceAgentManager(
 
             when (json["type"]?.jsonPrimitive?.content) {
                 "SETUP_COMPLETE" -> {
-                    InputAudioTranscript = ""
-                    OutputAudioTranscript = ""
+                    inputAudioTranscript = ""
+                    outputAudioTranscript = ""
                 }
                 "CONTROL" -> {
                     when (json["action"]?.jsonPrimitive?.content) {
@@ -200,24 +200,24 @@ class VoiceAgentManager(
                         }
                         "ABORT_TASK" -> {
                             clearPendingAudio()
-                            OnAbortTask()
+                            onAbortTask()
                         }
                     }
                 }
                 "INTERRUPTED" -> {
                     clearPendingAudio()
-                    OutputAudioTranscript = ""
+                    outputAudioTranscript = ""
                 }
                 "INPUT_TRANSCRIPTION" -> {
-                    InputAudioTranscript += json["text"]?.jsonPrimitive?.content ?: ""
+                    inputAudioTranscript += json["text"]?.jsonPrimitive?.content ?: ""
                     val finished = json["finished"]?.jsonPrimitive?.boolean ?: false
                     if (finished) {
-                        OnChatMessage(InputAudioTranscript, true)
-                        InputAudioTranscript = ""
+                        onChatMessage(inputAudioTranscript, true)
+                        inputAudioTranscript = ""
                     }
                 }
                 "OUTPUT_TRANSCRIPTION" -> {
-                    OutputAudioTranscript += json["text"]?.jsonPrimitive?.content ?: ""
+                    outputAudioTranscript += json["text"]?.jsonPrimitive?.content ?: ""
                 }
                 "AUDIO" -> {
                     val audioData = json["data"]?.jsonPrimitive?.contentOrNull
@@ -227,14 +227,13 @@ class VoiceAgentManager(
                 }
                 "TURN_COMPLETE" -> {
                     playAccumulatedAudio()
-                    if (OutputAudioTranscript.isNotEmpty()) {
-                        OnChatMessage(OutputAudioTranscript, false)
-                        OutputAudioTranscript = ""
+                    if (outputAudioTranscript.isNotEmpty()) {
+                        onChatMessage(outputAudioTranscript, false)
+                        outputAudioTranscript = ""
                     }
                 }
                 "RESPONSE" -> {
-                    val message = json["message"]?.jsonPrimitive?.contentOrNull
-
+                    // TODO: 서버 텍스트 응답 처리
                 }
                 else -> {
                     Log.d("VoiceAgent", "Unknown type: ${json["type"]}")

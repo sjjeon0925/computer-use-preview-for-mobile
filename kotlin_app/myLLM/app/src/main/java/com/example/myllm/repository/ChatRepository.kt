@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -56,13 +57,13 @@ class ChatRepository(private val context: Context) {
         onTaskTriggered = { taskDesc ->
             _voiceEvent.emit(VoiceEvent.TaskTriggered(taskDesc))
         },
-        OnChatMessage = { response: String, isUser: Boolean->
+        onChatMessage = { response: String, isUser: Boolean ->
             _voiceEvent.emit(VoiceEvent.ChatMessage(response, isUser))
         },
-        OnStopStreaming = {
+        onStopStreaming = {
             _voiceEvent.emit(VoiceEvent.StopStreaming)
         },
-        OnAbortTask = {
+        onAbortTask = {
             _voiceEvent.emit(VoiceEvent.AbortTask)
         }
     )
@@ -81,7 +82,7 @@ class ChatRepository(private val context: Context) {
         var shouldContinue = true
         var iterationCount = 0
         while (shouldContinue) {
-            kotlinx.coroutines.delay(1000) // 사이클 간 간격
+            delay(1000) // 사이클 간 간격
 
             Log.d("startAgentIteration", "iteration starting log...($iterationCount)")
             iterationCount += 1

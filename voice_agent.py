@@ -4,8 +4,7 @@ import inspect
 import json
 from typing import Optional, Dict, Any, AsyncGenerator
 
-from fastapi import WebSocket
-from starlette.websockets import WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect
 from google import genai
 from google.genai import types
 from google.genai.types import LiveConnectConfig, Content, Part
@@ -52,7 +51,17 @@ class VoiceAgentManager:
       └─ async for event in _start_session() → ws.send_json(event)
     """
 
-    PREDEFINED_USER_APP = ["Chrome", "메세지", "캘린더", "지도", "카메라", "녹음", "갤러리", "브라우저", "설정"]
+    PREDEFINED_USER_APP = [
+        "Chrome",
+        "메세지",
+        "캘린더",
+        "지도",
+        "카메라",
+        "녹음",
+        "갤러리",
+        "브라우저",
+        "설정",
+    ]
 
     def __init__(self, cu_agent: CUAgent, verbose: bool = True):
         self._cu_agent = cu_agent
@@ -75,20 +84,24 @@ class VoiceAgentManager:
         if self._verbose:
             print(f"[VoiceAgent] project={project}, location={location}")
 
-        cu_abilities = ", ".join(self._cu_agent.PREDEFINED_COMPUTER_USE_FUNCTIONS) + " 등"
+        cu_abilities = (
+            ", ".join(self._cu_agent.PREDEFINED_COMPUTER_USE_FUNCTIONS) + " 등"
+        )
         user_app_list = ", ".join(self.PREDEFINED_USER_APP) + " 등"
 
-        self._system_instruction = "\n".join([
-            "당신은 사용자의 일상 대화를 처리하는 친절하고 유능한 AI 비서입니다.",
-            "사용자의 의도를 파악하여 앱 조작이 필요한지 여부를 판단하는 것이 핵심 임무입니다.",
-            "당신이 직접 휴대폰을 조작하는 것이 아니고, CU Agent에게 구체적인 앱 조작 명령을 전달해야 합니다.",
-            "CU Agent는 휴대폰 앱 조작을 담당합니다.",
-            f"휴대폰에는 {user_app_list}과 같은 기본 앱들이 설치되어 있습니다.",
-            "사용자가 휴대폰 앱을 조작하도록 요청하면 지체 없이 execute_mobile_task 함수를 호출하십시오.",
-            f"execute_mobile_task 함수는 CU Agent에게 작업을 토스합니다. CU Agent는 {cu_abilities}과 같은 다양한 UI 조작을 수행할 수 있습니다.",
-            "execute_mobile_task 결과를 받으면 사용자에게 친절한 최종 요약 응답을 제공하십시오.",
-            "작업이 진행 중일 때 사용자가 '멈춰', '취소', '중단', '그만' 등의 표현을 사용하면 abort_mobile_task 함수를 즉시 호출하십시오.",
-        ])
+        self._system_instruction = "\n".join(
+            [
+                "당신은 사용자의 일상 대화를 처리하는 친절하고 유능한 AI 비서입니다.",
+                "사용자의 의도를 파악하여 앱 조작이 필요한지 여부를 판단하는 것이 핵심 임무입니다.",
+                "당신이 직접 휴대폰을 조작하는 것이 아니고, CU Agent에게 구체적인 앱 조작 명령을 전달해야 합니다.",
+                "CU Agent는 휴대폰 앱 조작을 담당합니다.",
+                f"휴대폰에는 {user_app_list}과 같은 기본 앱들이 설치되어 있습니다.",
+                "사용자가 휴대폰 앱을 조작하도록 요청하면 지체 없이 execute_mobile_task 함수를 호출하십시오.",
+                f"execute_mobile_task 함수는 CU Agent에게 작업을 토스합니다. CU Agent는 {cu_abilities}과 같은 다양한 UI 조작을 수행할 수 있습니다.",
+                "execute_mobile_task 결과를 받으면 사용자에게 친절한 최종 요약 응답을 제공하십시오.",
+                "작업이 진행 중일 때 사용자가 '멈춰', '취소', '중단', '그만' 등의 표현을 사용하면 abort_mobile_task 함수를 즉시 호출하십시오.",
+            ]
+        )
 
         self._client = genai.Client(vertexai=True, project=project, location=location)
         self._config = LiveConnectConfig(
@@ -99,16 +112,13 @@ class VoiceAgentManager:
             output_audio_transcription={},
         )
 
-    def get_cu_agent(self) -> CUAgent:
-        return self._cu_agent
-
     def _reset_task_state(self):
         """CU 작업 상태를 초기화합니다."""
         self._cu_task_in_progress = False
         self._last_cu_action_json = None
         self._pending_instruction = None
 
-    # ── 핵심: Gemini 세션 관리 (async generator) ─────────────────
+    # = Gemini 세션 관리 (async generator) =========
     async def _start_session(
         self,
         audio_input_queue: asyncio.Queue,
@@ -124,15 +134,17 @@ class VoiceAgentManager:
             model=self._model_id, config=self._config
         ) as session:
             self._gemini_session = session
-            self._loop = asyncio.get_event_loop()
+            self._loop = asyncio.get_running_loop()
 
-            # ── sender tasks ──────────────────────────────────────
+            # = sender tasks ===================
             async def send_audio():
                 try:
                     while True:
                         chunk: bytes = await audio_input_queue.get()
                         await session.send_realtime_input(
-                            media=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
+                            media=types.Blob(
+                                data=chunk, mime_type="audio/pcm;rate=16000"
+                            )
                         )
                 except asyncio.CancelledError:
                     pass
@@ -145,7 +157,7 @@ class VoiceAgentManager:
                 except asyncio.CancelledError:
                     pass
 
-            # ── receiver ──────────────────────────────────────────
+            # = receiver =====================
             event_queue: asyncio.Queue = asyncio.Queue()
 
             async def receive_loop():
@@ -164,32 +176,50 @@ class VoiceAgentManager:
                                 if server_content.model_turn:
                                     for part in server_content.model_turn.parts:
                                         if part.inline_data:
-                                            if inspect.iscoroutinefunction(audio_output_callback):
-                                                await audio_output_callback(part.inline_data.data)
+                                            if inspect.iscoroutinefunction(
+                                                audio_output_callback
+                                            ):
+                                                await audio_output_callback(
+                                                    part.inline_data.data
+                                                )
                                             else:
-                                                audio_output_callback(part.inline_data.data)
+                                                audio_output_callback(
+                                                    part.inline_data.data
+                                                )
 
                                 # 입력 전사
-                                if (server_content.input_transcription
-                                        and server_content.input_transcription.text):
-                                    await event_queue.put({
-                                        "type": "INPUT_TRANSCRIPTION",
-                                        "text": server_content.input_transcription.text,
-                                        "finished": getattr(
-                                            server_content.input_transcription, "finished", False
-                                        ),
-                                    })
+                                if (
+                                    server_content.input_transcription
+                                    and server_content.input_transcription.text
+                                ):
+                                    await event_queue.put(
+                                        {
+                                            "type": "INPUT_TRANSCRIPTION",
+                                            "text": server_content.input_transcription.text,
+                                            "finished": getattr(
+                                                server_content.input_transcription,
+                                                "finished",
+                                                False,
+                                            ),
+                                        }
+                                    )
 
                                 # 출력 전사
-                                if (server_content.output_transcription
-                                        and server_content.output_transcription.text):
-                                    await event_queue.put({
-                                        "type": "OUTPUT_TRANSCRIPTION",
-                                        "text": server_content.output_transcription.text,
-                                        "finished": getattr(
-                                            server_content.output_transcription, "finished", False
-                                        ),
-                                    })
+                                if (
+                                    server_content.output_transcription
+                                    and server_content.output_transcription.text
+                                ):
+                                    await event_queue.put(
+                                        {
+                                            "type": "OUTPUT_TRANSCRIPTION",
+                                            "text": server_content.output_transcription.text,
+                                            "finished": getattr(
+                                                server_content.output_transcription,
+                                                "finished",
+                                                False,
+                                            ),
+                                        }
+                                    )
 
                                 # Turn 완료
                                 if server_content.turn_complete:
@@ -206,49 +236,64 @@ class VoiceAgentManager:
                                     if fc.name == "execute_mobile_task":
                                         task_desc = fc.args.get("task_description", "")
                                         # 이미 task 진행 중이면 중복 호출 무시
-                                        if self._pending_instruction or self._cu_task_in_progress:
+                                        if (
+                                            self._pending_instruction
+                                            or self._cu_task_in_progress
+                                        ):
                                             if self._verbose:
-                                                print(f"[VoiceAgent] Task already in progress, ignoring duplicate call")
-                                            function_responses.append(types.FunctionResponse(
+                                                print(
+                                                    f"[VoiceAgent] Task already in progress, ignoring duplicate call"
+                                                )
+                                            function_responses.append(
+                                                types.FunctionResponse(
+                                                    name=fc.name,
+                                                    id=fc.id,
+                                                    response={
+                                                        "status": "TASK_ALREADY_IN_PROGRESS"
+                                                    },
+                                                )
+                                            )
+                                            continue
+                                        if self._verbose:
+                                            print(
+                                                f"[VoiceAgent] Task Triggered: {task_desc}"
+                                            )
+                                        self._pending_instruction = task_desc
+                                        await event_queue.put(
+                                            {
+                                                "type": "CONTROL",
+                                                "action": "START_TASK",
+                                                "message": task_desc,
+                                            }
+                                        )
+                                        function_responses.append(
+                                            types.FunctionResponse(
                                                 name=fc.name,
                                                 id=fc.id,
                                                 response={
-                                                    "status": "TASK_ALREADY_IN_PROGRESS",
-                                                    "instruction": "이미 작업이 진행 중입니다. 결과가 올 때까지 기다리십시오. execute_mobile_task를 다시 호출하지 마십시오.",
+                                                    "status": "SCREENSHOT_REQUESTED"
                                                 },
-                                            ))
-                                            continue
-                                        if self._verbose:
-                                            print(f"[VoiceAgent] Task Triggered: {task_desc}")
-                                        self._pending_instruction = task_desc
-                                        await event_queue.put({
-                                            "type": "CONTROL",
-                                            "action": "START_TASK",
-                                            "message": task_desc,
-                                        })
-                                        function_responses.append(types.FunctionResponse(
-                                            name=fc.name,
-                                            id=fc.id,
-                                            response={
-                                                "status": "SCREENSHOT_REQUESTED",
-                                                "instruction": "작업이 기기로 전달되었습니다. 스크린샷 결과가 올 때까지 기다리십시오. execute_mobile_task를 다시 호출하지 마십시오.",
-                                            },
-                                        ))
+                                            )
+                                        )
 
                                     elif fc.name == "abort_mobile_task":
                                         if self._verbose:
                                             print(f"[VoiceAgent] Task Aborted by user")
                                         self._reset_task_state()
-                                        await event_queue.put({
-                                            "type": "CONTROL",
-                                            "action": "ABORT_TASK",
-                                            "message": "작업이 중단되었습니다.",
-                                        })
-                                        function_responses.append(types.FunctionResponse(
-                                            name=fc.name,
-                                            id=fc.id,
-                                            response={"status": "TASK_ABORTED"},
-                                        ))
+                                        await event_queue.put(
+                                            {
+                                                "type": "CONTROL",
+                                                "action": "ABORT_TASK",
+                                                "message": "작업이 중단되었습니다.",
+                                            }
+                                        )
+                                        function_responses.append(
+                                            types.FunctionResponse(
+                                                name=fc.name,
+                                                id=fc.id,
+                                                response={"status": "TASK_ABORTED"},
+                                            )
+                                        )
 
                                 if function_responses:
                                     await session.send_tool_response(
@@ -260,7 +305,7 @@ class VoiceAgentManager:
                 finally:
                     await event_queue.put(None)  # sentinel: 세션 종료 신호
 
-            # ── 태스크 시작 ───────────────────────────────────────
+            # = 태스크 시작 ====================
             send_audio_task = asyncio.create_task(send_audio())
             send_text_task = asyncio.create_task(send_text())
             receive_task = asyncio.create_task(receive_loop())
@@ -282,7 +327,7 @@ class VoiceAgentManager:
                 self._gemini_session = None
                 self._loop = None
 
-    # ── 메인 진입점 ──────────────────────────────────────────────
+    # = 메인 진입점 =======================
     async def run(self, client_ws: WebSocket):
         """
         Android WebSocket ↔ Gemini Live API 세션을 연결합니다.
@@ -322,7 +367,9 @@ class VoiceAgentManager:
                     print("[VoiceAgent] 클라이언트 연결 종료")
             except Exception as e:
                 if self._verbose:
-                    print(f"[VoiceAgent] receive_from_client 오류: {type(e).__name__} - {e}")
+                    print(
+                        f"[VoiceAgent] receive_from_client 오류: {type(e).__name__} - {e}"
+                    )
 
         receive_task = asyncio.create_task(receive_from_client())
         try:
@@ -341,12 +388,14 @@ class VoiceAgentManager:
         finally:
             receive_task.cancel()
 
-    # ── process_step (CUAgent REST 콜백) ─────────────────────────
+    # = process_step (CUAgent REST 콜백) =============
     def process_step(self, screenshot_bytes: bytes, activity: str) -> Dict[str, Any]:
         """CUAgent로 다음 액션 결정 후, 완료 시 Gemini에 결과 전달"""
         if self._cu_task_in_progress and self._last_cu_action_json:
             if self._verbose:
-                print(f"[VoiceAgent] 작업 계속 (이전 액션: {self._last_cu_action_json['action']})")
+                print(
+                    f"[VoiceAgent] 작업 계속 (이전 액션: {self._last_cu_action_json['action']})"
+                )
             cu_result = self._cu_agent.step(
                 previous_action=self._last_cu_action_json,
                 current_screenshot_data=screenshot_bytes,
@@ -360,7 +409,10 @@ class VoiceAgentManager:
             )
             self._pending_instruction = None
         else:
-            return {"type": "ERROR", "message": "스크린샷을 받았으나 대기 중인 작업이 없습니다."}
+            return {
+                "type": "ERROR",
+                "message": "스크린샷을 받았으나 대기 중인 작업이 없습니다.",
+            }
 
         if cu_result["type"] == "ACTION":
             self._cu_task_in_progress = True
@@ -386,7 +438,7 @@ class VoiceAgentManager:
 
         return cu_result
 
-    # ── 테스트 ───────────────────────────────────────────────────
+    # = 테스트 ==========================
     async def test(self):
         """
         텍스트 3턴을 queue에 넣고 이벤트를 출력하는 테스트.
@@ -436,8 +488,7 @@ class VoiceAgentManager:
 
 if __name__ == "__main__":
     cu_agent = CUAgent(
-        model_name='gemini-2.5-computer-use-preview-10-2025',
-        verbose=True
+        model_name="gemini-2.5-computer-use-preview-10-2025", verbose=True
     )
     voice_agent = VoiceAgentManager(cu_agent=cu_agent)
     asyncio.run(voice_agent.test())

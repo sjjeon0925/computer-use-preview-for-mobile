@@ -14,10 +14,6 @@ data class AgentResponseDto(
 )
 
 /**
- * /chat/query
- * {"type": "RESPONSE", "message": self.final_reasoning}
- * {'type': 'REQUIRE_SCREENSHOT', 'message': '작업을 위해 현재 화면 스크린샷이 필요합니다. 전송해주세요.'}
- *
  * /chat/step
  * {
  *    'type': 'ACTION',

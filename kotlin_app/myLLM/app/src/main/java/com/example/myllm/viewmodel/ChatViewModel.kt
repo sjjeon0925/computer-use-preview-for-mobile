@@ -16,7 +16,6 @@ import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.repository.ChatRepository
 import com.example.myllm.repository.VoiceEvent
 import kotlinx.coroutines.launch
-import kotlin.collections.plus
 
 @RequiresApi(Build.VERSION_CODES.S)
 class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
@@ -39,9 +38,9 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                     is VoiceEvent.TaskTriggered -> {
                         isTaskActive = true
                         isLoading = true
-                        messages = messages + AppChatMessage(voiceEvent.tackDesc, true, isSpeech = true)
+                        messages = messages + AppChatMessage(voiceEvent.taskDesc, true, isSpeech = true)
                         isCaptureRequested = true
-                        Log.d("ChatViewModel", "Voice-triggered Task: $voiceEvent.tackDesc")
+                        Log.d("ChatViewModel", "Voice-triggered Task: ${voiceEvent.taskDesc}")
                     }
                     is VoiceEvent.ChatMessage -> {
                         val response = voiceEvent.response
@@ -115,8 +114,7 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
 
     /**
      * 텍스트 메시지를 처리하고 전송합니다.
-     * 녹음 사용 -> ChatAgent에게 보냄.
-     * 녹음 사용 안 함 -> WebSocket으로 멀티모달 에이전트에게 보냄
+     * 음성 모드(isRecording=true): VoiceAgent에게 텍스트를 전달합니다.
      */
     fun processAndSendText(currentInput: String) {
         if (currentInput.isBlank() || isLoading) return
@@ -130,8 +128,8 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         }
     }
 
-    // --- Private 네트워크/데이터 처리 함수 ---
-
+    // --- 네트워크/데이터 처리 함수 ---
+    // TODO: chat_agent를 쓸 때 텍스트 응답 처리용 함수였음. voice_agent를 쓰면서 voice_manager로 역할이 옮겨져서 아마도 삭제하는 것이 프로젝트 역할 분담에서 좋을 것 같음.
     private fun handleLlmResponse(response: AgentResponseDto) {
         Log.d("ChatViewModel", "LLM 응답 수신: Type=${response.type}")
         val responseText: String
@@ -150,8 +148,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
                 Log.d("ChatViewModel", "LLM 텍스트 응답: $responseText")
                 isCaptureRequested = true
             }
-            // /chat/step
-            // Action은 repository.processUserMessage에서 따로 처리함.
             "ACTION" -> {
                 responseText = "요청을 실행 중입니다..."
                 Log.d("ChatViewModel", "기능 호출: ${response.action}, 인자: ${response.args}")
@@ -169,10 +165,6 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
             val llmMessage = AppChatMessage(responseText, false)
             messages = messages + llmMessage
         }
-    }
-
-    private fun showError(error: Throwable){
-        messages = messages + AppChatMessage("에러 발생: ${error.message}", false)
     }
 
 }

@@ -35,13 +35,12 @@ import kotlinx.coroutines.launch
 
 // 이 서비스는 화면 캡처를 위해 Foreground Service로 실행되어야 한다.
 class ScreenCaptureService : Service() {
-    companion object{
+    companion object {
         const val DEFAULT_SCALE = 0.5f
+        private const val TAG = "CaptureService"
+        private const val NOTIFICATION_CHANNEL_ID = "ScreenCaptureChannel"
+        private const val NOTIFICATION_ID = 101
     }
-
-    private val TAG = "CaptureService"
-    private val NOTIFICATION_CHANNEL_ID = "ScreenCaptureChannel"
-    private val NOTIFICATION_ID = 101
 
     // MediaProjection 관련 변수
     private var mediaProjection: MediaProjection? = null
@@ -91,10 +90,10 @@ class ScreenCaptureService : Service() {
     }
 
     private val binder = LocalBinder()
-    inner class LocalBinder() : Binder(){
+    inner class LocalBinder : Binder() {
         fun getService(): ScreenCaptureService = this@ScreenCaptureService
     }
-    val mediaProjectionCallback = object : MediaProjection.Callback() {
+    private val mediaProjectionCallback = object : MediaProjection.Callback() {
         override fun onStop() {
             // CLEAN UP RESOURCES HERE
             mediaProjection?.stop()
@@ -111,7 +110,6 @@ class ScreenCaptureService : Service() {
         val windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val metrics = DisplayMetrics()
 
-        screenDensityDpi = resources.configuration.densityDpi
         // 최신 API 버전에 따라 다른 방식 사용
         // 최신 api(버전 30이상) => DisplayMetrics 사용
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -147,12 +145,12 @@ class ScreenCaptureService : Service() {
             startForeground(NOTIFICATION_ID, createNotification())
         }
 
-        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode,data)
+        mediaProjection = mediaProjectionManager.getMediaProjection(resultCode, data)
         mediaProjection?.registerCallback(mediaProjectionCallback, Handler(Looper.getMainLooper()))
 
         val scaledWidth = (screenWidth * scale).toInt()
         val scaledHeight = (screenHeight * scale).toInt()
-        val scaledDpi = (screenDensityDpi* scale).toInt()
+        val scaledDpi = (screenDensityDpi * scale).toInt()
 
         imageReader = ImageReader.newInstance(
             scaledWidth, scaledHeight,
@@ -207,7 +205,6 @@ class ScreenCaptureService : Service() {
     }
 
     private fun processImage(image: Image): Bitmap? {
-
         val scaledWidth = (screenWidth * scale).toInt()
         val scaledHeight = (screenHeight * scale).toInt()
 
