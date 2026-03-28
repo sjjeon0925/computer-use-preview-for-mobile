@@ -15,6 +15,8 @@ import com.example.myllm.service.ActionController
 import com.example.myllm.service.ScreenCaptureService
 import com.example.myllm.service.ScreenCaptureService.Companion.DEFAULT_SCALE
 import com.example.myllm.service.UserService
+import com.example.myllm.service.VoiceAgentManager
+import com.example.myllm.service.VoiceEvent
 import com.example.myllm.utils.TaskLoopUtils
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope

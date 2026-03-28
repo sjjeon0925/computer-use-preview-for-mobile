@@ -1,4 +1,4 @@
-package com.example.myllm.repository
+package com.example.myllm.service
 
 import android.annotation.SuppressLint
 import android.media.AudioAttributes
@@ -11,7 +11,6 @@ import android.os.Build
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresApi
-import com.example.myllm.service.UserService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -232,9 +231,9 @@ class VoiceAgentManager(
                         outputAudioTranscript = ""
                     }
                 }
-                "RESPONSE" -> {
-                    // TODO: 서버 텍스트 응답 처리
-                }
+//                "RESPONSE" -> {
+//                    // TODO: 서버 텍스트 응답 처리
+//                }
                 else -> {
                     Log.d("VoiceAgent", "Unknown type: ${json["type"]}")
                 }

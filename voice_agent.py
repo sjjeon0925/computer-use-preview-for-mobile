@@ -99,6 +99,7 @@ class VoiceAgentManager:
                 "사용자가 휴대폰 앱을 조작하도록 요청하면 지체 없이 execute_mobile_task 함수를 호출하십시오.",
                 f"execute_mobile_task 함수는 CU Agent에게 작업을 토스합니다. CU Agent는 {cu_abilities}과 같은 다양한 UI 조작을 수행할 수 있습니다.",
                 "execute_mobile_task 결과를 받으면 사용자에게 친절한 최종 요약 응답을 제공하십시오.",
+                "알고 있는 대답이더라도 execute_mobile_task 결과를 받기 전까지 요약 응답을 제공하지 마십시오.",
                 "작업이 진행 중일 때 사용자가 '멈춰', '취소', '중단', '그만' 등의 표현을 사용하면 abort_mobile_task 함수를 즉시 호출하십시오.",
             ]
         )

@@ -14,7 +14,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.myllm.data.AppChatMessage
 import com.example.myllm.network.AgentResponseDto
 import com.example.myllm.repository.ChatRepository
-import com.example.myllm.repository.VoiceEvent
+import com.example.myllm.service.VoiceEvent
 import kotlinx.coroutines.launch
 
 @RequiresApi(Build.VERSION_CODES.S)
@@ -125,6 +125,18 @@ class ChatViewModel(private val repository: ChatRepository) : ViewModel() {
         if(isRecording){
             repository.sendVoiceText(currentInput)
             return
+        }
+        viewModelScope.launch {
+            isLoading = true
+            Log.i("ChatViewModel", "Chat Sending request: ${currentInput}")
+            val result = repository.processUserMessage(currentInput)
+
+            result.onSuccess { response ->
+                handleLlmResponse(response)
+            }.onFailure { error ->
+                Log.e("CharViewModel", "")
+            }
+            isLoading = false
         }
     }
 
